@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photo-archive"
+version = "0.1.0"
+description = "Preservation-minded family photo archive tooling"
+authors = [{name = "Family Archive"}]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "typer>=0.12",
+  "pillow>=10.0",
+  "tqdm>=4.66",
+  "python-dateutil>=2.8",
+  "numpy>=1.26",
+  "opencv-contrib-python>=4.9",
+  "pyobjc-core>=11.0",
+  "pyobjc-framework-Cocoa>=11.0",
+  "pyobjc-framework-Vision>=11.0",
+  "pyobjc-framework-Quartz>=11.0"
+]
+
+[project.scripts]
+ingest = "cli.ingest:run"
+report = "cli.report:run"
+publish = "cli.publish:run"
+assign = "cli.assign:run"
+thumbs = "cli.thumbs:run"
+gallery = "cli.gallery:run"
+pipeline = "cli.pipeline:main"
+repair = "cli.repair:app"
+review = "cli.review:run"
+faces = "cli.faces:run"
+ocr = "cli.ocr:app"
+attach-backs = "cli.attach_backs:app"
+phash-dupes = "cli.phash_dupes:app"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["archive_lib*", "cli*"]
+exclude = ["tests*", "templates*", "scripts*"]

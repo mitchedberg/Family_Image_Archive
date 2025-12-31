@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Photo Library - These are the actual photos being manipulated
+*.photoslibrary/
+01_INBOX/
+02_WORKING_BUCKETS/
+03_MODELS/
+03_PUBLISHED_TO_PHOTOS/
+04_APPLE_PHOTOS_EXPORTS/
+
+# Archives - Large binary files
+*.zip
+*.tar.gz
+*.rar
+
+# Logs and runtime files
+*.log
+*.pid
+server.log
+server.pid
+
+# Generated data files
+*.csv
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.sublime-*
+.code-workspace
+
+# Environment variables and secrets
+.env
+.env.local
+*.pem
+*.key
+credentials.json
+
+# Node modules (if you add any JS tooling later)
+node_modules/
+
+# GitHub Actions runner work directory (if running locally)
+_work/

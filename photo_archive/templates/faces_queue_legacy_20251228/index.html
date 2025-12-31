@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Face Queue</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="queue-app">
+      <header class="queue-app__header">
+        <div class="summary">
+          <div>
+            <h1>Face Queue</h1>
+            <p id="summary"></p>
+          </div>
+          <div class="controls">
+            <label>
+              <span>Active Label</span>
+              <select id="label-select"></select>
+            </label>
+            <label>
+              <span>Similarity</span>
+              <input id="similarity-slider" type="range" min="0" max="1" step="0.01" />
+              <strong id="similarity-value"></strong>
+            </label>
+            <button id="new-person-btn" type="button">New Person</button>
+            <button id="refresh-btn" type="button">Next Candidate</button>
+          </div>
+        </div>
+        <div class="tips">
+          Hotkeys: T = accept/save label · F = reject · S = skip · U = undo · C = next candidate · R = refresh current label · N = start new person.
+        </div>
+      </header>
+      <main class="queue-main">
+        <aside class="queue-sidebar">
+          <div class="sidebar-header">
+            <div>
+              <h2>People</h2>
+              <p>Select a person to review matches.</p>
+            </div>
+            <button id="sidebar-refresh-btn" type="button" aria-label="Refresh people list">↻</button>
+          </div>
+          <div id="label-list" class="label-list">
+            <p class="empty">No labels yet — add someone with “New Person”.</p>
+          </div>
+        </aside>
+        <section class="candidate-panel">
+          <div class="candidate-panel__status">
+            <span id="mode-indicator">Pick a label or start a new person.</span>
+            <div class="label-tools">
+              <div id="label-summary" class="label-summary">No label selected.</div>
+              <button id="merge-open-btn" type="button" disabled>Merge Labels</button>
+            </div>
+          </div>
+          <div class="view-tabs">
+            <button id="view-single-btn" type="button" class="is-active">Single Queue</button>
+            <button id="view-batch-btn" type="button">Batch Grid</button>
+          </div>
+          <div id="candidate-body" class="candidate-panel__body">
+            <div id="single-view" class="view-single">
+              <div class="candidate-layout">
+                <div class="candidate-layout__image">
+                  <p class="empty">Loading…</p>
+                </div>
+                <div class="candidate-layout__details">
+                  <div id="legacy-panel" class="legacy-panel is-hidden single-only">
+                    <span id="legacy-text"></span>
+                    <div id="legacy-chip-row" class="legacy-chip-row"></div>
+                  </div>
+                  <div class="candidate-face">
+                    <canvas id="face-crop" class="candidate-face__canvas"></canvas>
+                    <div class="candidate-face__label">Inset</div>
+                  </div>
+                  <ul class="candidate-meta">
+                    <li><span>Bucket:</span><strong id="meta-bucket">—</strong></li>
+                    <li><span>Source:</span><strong id="meta-source">—</strong></li>
+                    <li><span>Confidence:</span><strong id="meta-confidence">—</strong></li>
+                    <li><span>Similarity:</span><strong id="meta-similarity">—</strong></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div id="batch-view" class="view-batch is-hidden">
+              <div class="batch-controls">
+                <span>Review multiple matches at once.</span>
+                <div class="batch-controls__buttons">
+                  <button id="batch-refresh-btn" type="button">Refresh Batch</button>
+                  <button id="batch-clear-btn" type="button">Clear Decisions</button>
+                  <button id="batch-commit-btn" type="button" disabled>Commit Decisions</button>
+                </div>
+              </div>
+              <div id="batch-grid" class="batch-grid">
+                <p class="empty">No batch loaded yet.</p>
+              </div>
+            </div>
+          </div>
+          <div id="seed-controls" class="seed-controls is-hidden">
+            <label>
+              <span>Name this person</span>
+              <input id="seed-label-input" type="text" placeholder="Enter full name" autocomplete="off" />
+            </label>
+            <button id="seed-save-btn" type="button">Save Label (Enter / T)</button>
+          </div>
+          <div class="candidate-panel__actions single-only">
+            <button id="accept-btn" type="button" disabled>Accept (T)</button>
+            <button id="reject-btn" type="button" disabled>Reject (F)</button>
+            <button id="skip-btn" type="button">Skip (S)</button>
+            <button id="undo-btn" type="button" disabled>Undo (U)</button>
+          </div>
+          <div class="ignore-panel single-only">
+            <label>
+              <span>Ignore reason</span>
+              <select id="ignore-reason">
+                <option value="background">Background / non-primary</option>
+                <option value="false-positive">Not a face</option>
+                <option value="partial">Partial / too small</option>
+                <option value="crowd">Crowd / low value</option>
+              </select>
+            </label>
+            <button id="ignore-btn" type="button">Ignore (B)</button>
+            <button id="crowd-btn" type="button" class="crowd-btn">Ignore Remaining In Photo (Crowd)</button>
+          </div>
+          <div class="audit-panel">
+            <div class="audit-panel__header">
+              <h3>Confirmed faces</h3>
+              <button id="audit-refresh-btn" type="button">Refresh</button>
+            </div>
+            <div id="audit-list" class="audit-list">
+              <p class="empty">Select a label to see confirmed faces.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+      <footer class="queue-app__footer">
+        Labeled faces persist to <code>config/face_tags.csv</code>. Rejections persist to <code>config/face_votes.csv</code>.
+      </footer>
+    </div>
+    <div id="merge-dialog" class="merge-dialog is-hidden" aria-hidden="true">
+      <div class="merge-dialog__card">
+        <div class="merge-dialog__header">
+          <h3>Merge Labels</h3>
+          <button id="merge-close-btn" type="button" aria-label="Close merge dialog">&times;</button>
+        </div>
+        <p class="merge-dialog__text">Combine duplicates by moving every confirmed face from one label into another.</p>
+        <label>
+          <span>Move faces from</span>
+          <select id="merge-source"></select>
+        </label>
+        <label>
+          <span>Into</span>
+          <select id="merge-target"></select>
+        </label>
+        <p id="merge-error" class="merge-dialog__error is-hidden"></p>
+        <div class="merge-dialog__actions">
+          <button id="merge-confirm-btn" type="button">Merge Labels</button>
+          <button id="merge-cancel-btn" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <script src="queue_data.js"></script>
+    <script src="queue_app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Bucket Review</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <header class="app__header">
+        <div class="header-bar">
+          <div class="title-block">
+            <h1>Bucket Review</h1>
+            <p id="summary"></p>
+          </div>
+          <div class="header-actions">
+            <div class="nav-buttons" role="group">
+              <button id="btn-prev" type="button" aria-label="Previous bucket">Prev (K)</button>
+              <button id="btn-next" type="button" aria-label="Next bucket">Next (J)</button>
+            </div>
+            <div class="segmented" id="compare-toggle" role="group" aria-label="Compare mode">
+              <button type="button" data-compare="ai" aria-pressed="true">Original ↔ AI</button>
+              <button type="button" data-compare="back" aria-pressed="false">Original ↔ Back</button>
+            </div>
+          </div>
+        </div>
+        <div class="view-toolbar">
+          <div class="filter-controls">
+            <span>Sources:</span>
+            <div id="source-filters" class="chip-group"></div>
+          </div>
+          <div class="variant-filters">
+            <span>Variant filter:</span>
+            <div id="variant-filters" class="chip-group">
+              <button type="button" class="chip" data-variant-filter="has_back">Has Back</button>
+              <button type="button" class="chip" data-variant-filter="has_ai">Has AI</button>
+              <button type="button" class="chip" data-variant-filter="missing_ai">No AI</button>
+            </div>
+          </div>
+          <div class="back-controls">
+            <span>Back rotation:</span>
+            <div class="back-controls__buttons">
+              <button id="rotate-back-left" type="button" aria-label="Rotate back counter clockwise 90 degrees">↶ 90°</button>
+              <button id="rotate-back-right" type="button" aria-label="Rotate back clockwise 90 degrees">↷ 90°</button>
+              <button id="rotate-back-reset" type="button">Reset</button>
+            </div>
+          </div>
+          <div class="zoom-controls">
+            <label for="zoom-slider">Zoom</label>
+            <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+            <input id="zoom-slider" type="range" min="1" max="4" step="0.1" value="1" />
+            <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+            <span id="zoom-value">1.0×</span>
+            <button id="zoom-reset" type="button">Reset View</button>
+            <button id="fullres-toggle" type="button" class="toggle-button" aria-pressed="false">Full Res OFF</button>
+          </div>
+        </div>
+      </header>
+      <main id="bucket-container" class="bucket-container"></main>
+      <footer class="app__footer">
+        <div class="note-panel">
+          <div class="note-panel__section">
+            <div class="note-panel__label">
+              <h3>Voice Transcripts</h3>
+            </div>
+            <div id="voice-transcript-list" class="note-readonly"></div>
+          </div>
+          <div class="note-panel__section">
+            <div class="note-panel__label">
+              <h3>OCR Text</h3>
+            </div>
+            <div id="ocr-readonly" class="note-readonly"></div>
+          </div>
+          <div class="note-panel__section">
+            <div class="note-panel__label">
+              <div>
+                <h3>Manual Notes</h3>
+                <span class="note-panel__hint">Voice / OCR are read-only. Add new notes below; existing entries stay immutable unless you unlock editing.</span>
+              </div>
+            </div>
+            <div class="note-panel__actions">
+              <button id="ocr-back-button" type="button">OCR Back → Notes</button>
+              <button id="mark-verified-button" type="button">Mark Verified</button>
+              <button id="mark-draft-button" type="button">Mark Draft</button>
+              <button id="note-edit-toggle" type="button">Unlock Editing</button>
+              <span id="note-lock-indicator" class="note-lock-indicator">Notes locked</span>
+            </div>
+            <textarea id="note-input" rows="3" placeholder="Manual notes (read-only until unlocked)." readonly></textarea>
+            <div class="note-panel__add">
+              <textarea id="note-add-input" rows="2" placeholder="Add new note…"></textarea>
+              <button id="note-add-button" type="button">Add Note</button>
+            </div>
+          </div>
+          <div class="note-panel__meta">
+            <span id="ocr-status"></span>
+            <span id="note-status"></span>
+          </div>
+        </div>
+        <div class="footer-status">
+          <div id="status-bar" class="status-bar"></div>
+          <div id="shortcut-bar" class="shortcut-bar"></div>
+        </div>
+      </footer>
+    </div>
+    <div id="state-overlay" class="state-overlay" aria-live="polite"></div>
+    <script src="review_data.js"></script>
+    <script src="review_app.js"></script>
+  </body>
+</html>
