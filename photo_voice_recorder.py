@@ -46,6 +46,11 @@ try:
 except ImportError:  # pragma: no cover
     whisper = None
 
+try:
+    from apple_speech import AppleSpeechRecognizer
+except Exception:  # pragma: no cover
+    AppleSpeechRecognizer = None
+
 
 def safe_name(value: str, max_len: int = 140) -> str:
     filtered = re.sub(r"[^\w\-\.@:]+", "_", value.strip())
@@ -85,6 +90,74 @@ class Snapshot:
     def key(self) -> str:
         session = self.sessionId or ""
         return f"{session}::{self.bucketId}::{self.imageId}"
+
+
+@dataclass
+class TranscriptionTask:
+    kind: str
+    speaker: str
+    session_dir: Optional[Path] = None
+    audio_path: Optional[Path] = None
+
+
+_WHISPER_MODEL_LOCK = threading.Lock()
+_WHISPER_MODEL_CACHE: Dict[str, object] = {}
+
+
+def get_whisper_model() -> object:
+    if whisper is None:
+        raise RuntimeError("Whisper is not available.")
+    with _WHISPER_MODEL_LOCK:
+        cached = _WHISPER_MODEL_CACHE.get("model")
+        cached_name = _WHISPER_MODEL_CACHE.get("name")
+        if cached is not None and cached_name == DEFAULT_WHISPER_MODEL:
+            return cached
+        model = whisper.load_model(DEFAULT_WHISPER_MODEL)
+        _WHISPER_MODEL_CACHE["model"] = model
+        _WHISPER_MODEL_CACHE["name"] = DEFAULT_WHISPER_MODEL
+        return model
+
+
+def load_clip_meta(audio_path: Path) -> Optional[dict]:
+    meta_path = audio_path.with_suffix(".json")
+    if not meta_path.exists():
+        return None
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def write_transcript_file(audio_path: Path, text: str) -> None:
+    if not text:
+        return
+    txt_path = audio_path.with_suffix(".txt")
+    try:
+        txt_path.write_text(text.strip() + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def transcribe_clip(audio_path: Path, speaker: str) -> bool:
+    if not audio_path.exists():
+        return False
+    meta = load_clip_meta(audio_path)
+    if not meta or not meta.get("bucketId"):
+        return False
+    model = get_whisper_model()
+    try:
+        result = model.transcribe(str(audio_path), fp16=False)
+    except Exception:  # pragma: no cover
+        return False
+    text = (result.get("text") or "").strip()
+    if not text:
+        return False
+    bucket_prefix = str(meta["bucketId"])
+    image_id = meta.get("imageId") or ""
+    transcripts = {bucket_prefix: [(image_id, text)]}
+    apply_voice_transcripts(transcripts, speaker, meta.get("sessionId"))
+    write_transcript_file(audio_path, text)
+    return True
 
 
 class AudioSession:
@@ -151,9 +224,9 @@ class AudioSession:
         if self.mode == "continuous" and initial_snapshot:
             self._write_marker(initial_snapshot)
 
-    def stop(self) -> Optional[Path]:
+    def stop(self) -> Tuple[Optional[Path], Optional[Path]]:
         if not self.recording:
-            return None
+            return None, None
         session_dir = self.session_dir
         try:
             if self.stream:
@@ -161,7 +234,7 @@ class AudioSession:
                 self.stream.close()
         finally:
             self.stream = None
-        self._close_current_file()
+        final_clip = self._close_current_file()
         if self.markers_fp:
             self.markers_fp.flush()
             self.markers_fp.close()
@@ -172,24 +245,26 @@ class AudioSession:
         self.session_dir = None
         self.session_start_monotonic = None
         self.device_index = None
-        return session_dir
+        return session_dir, final_clip
 
-    def on_state_change(self, snapshot: Snapshot) -> None:
+    def on_state_change(self, snapshot: Snapshot) -> Optional[Path]:
         if not snapshot.bucketId or not snapshot.imageId:
-            return
+            return None
         if not self.recording:
             self.current_snapshot = snapshot
-            return
+            return None
         if self.current_snapshot and snapshot.key() == self.current_snapshot.key():
             if self.mode == "continuous" and snapshot.noteFlag:
                 self._write_marker(snapshot)
-            return
+            return None
         self.current_snapshot = snapshot
         if self.mode == "segmented":
-            self._close_current_file()
+            finished = self._close_current_file()
             self._open_file_for_snapshot(snapshot)
+            return finished
         else:
             self._write_marker(snapshot)
+        return None
 
     def _elapsed_ms(self) -> int:
         if self.session_start_monotonic is None:
@@ -250,7 +325,7 @@ class AudioSession:
         )
         self.current_clip_path = wav_path
 
-    def _close_current_file(self) -> None:
+    def _close_current_file(self) -> Optional[Path]:
         if self.sndfile:
             self.sndfile.flush()
             self.sndfile.close()
@@ -258,7 +333,8 @@ class AudioSession:
             finished = self.current_clip_path
             self.current_clip_path = None
             if finished:
-                self._process_finished_clip(finished)
+                return self._process_finished_clip(finished)
+        return None
 
     def _on_audio(self, indata, frames, time_info, status) -> None:
         if status:
@@ -268,13 +344,13 @@ class AudioSession:
             return
         self.sndfile.write(indata.copy())
 
-    def _process_finished_clip(self, wav_path: Path) -> None:
+    def _process_finished_clip(self, wav_path: Path) -> Optional[Path]:
         profile = self.audio_profile or {}
         codec = str(profile.get("codec") or "aac").lower()
         if codec not in {"aac", "alac"}:
-            return
+            return wav_path
         if shutil.which("afconvert") is None:
-            return
+            return wav_path
         target = wav_path.with_suffix(".m4a")
         cmd = ["afconvert", "-f", "m4af"]
         if codec == "aac":
@@ -286,8 +362,9 @@ class AudioSession:
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             wav_path.unlink(missing_ok=True)
+            return target
         except subprocess.CalledProcessError:
-            return
+            return wav_path
 
 
 class RecorderUI(QWidget):
@@ -308,6 +385,10 @@ class RecorderUI(QWidget):
         self.chk_segmented.setChecked(True)
         self.chk_continuous = QCheckBox("Continuous")
         self.chk_auto_start = QCheckBox("Auto-start on first snapshot")
+        self.chk_live_dictation = QCheckBox("Apple live dictation")
+        self.chk_whisper_photo = QCheckBox("Whisper per-photo")
+        self.chk_whisper_session = QCheckBox("Whisper full-session")
+        self.chk_whisper_session.setChecked(True)
         self.audio_format_box = QComboBox()
         self.audio_format_box.addItems(["AAC 128 kbps (m4a)", "Apple Lossless (m4a)"])
         self.mic_box = QComboBox()
@@ -344,12 +425,24 @@ class RecorderUI(QWidget):
         manage_row.addStretch()
         manage_row.addWidget(self.btn_transcribe_old)
 
+        transcribe_row = QHBoxLayout()
+        transcribe_row.addWidget(QLabel("Transcription:"))
+        transcribe_row.addWidget(self.chk_live_dictation)
+        transcribe_row.addWidget(self.chk_whisper_photo)
+        transcribe_row.addWidget(self.chk_whisper_session)
+        transcribe_row.addStretch()
+
         layout = QVBoxLayout()
         layout.addLayout(mode_row)
         layout.addLayout(controls_row)
         layout.addLayout(manage_row)
+        layout.addLayout(transcribe_row)
         layout.addWidget(self.bucket_label)
         layout.addWidget(self.state_label)
+        self.live_dictation_label = QLabel("Live dictation: (disabled)")
+        self.live_dictation_label.setWordWrap(True)
+        self.live_dictation_label.setStyleSheet("color: #444; font-size: 12px;")
+        layout.addWidget(self.live_dictation_label)
         self.setLayout(layout)
         self.sessions = {mode: AudioSession() for mode in ("segmented", "continuous")}
         self.recording_modes: set[str] = set()
@@ -362,34 +455,126 @@ class RecorderUI(QWidget):
         self.btn_start.clicked.connect(self.start_recording)
         self.btn_stop.clicked.connect(self.stop_recording)
         self.btn_transcribe_old.clicked.connect(self.transcribe_existing_session)
+        self.chk_live_dictation.toggled.connect(self._sync_live_dictation)
         self._emit_recorder_state()
-        
+
         self.transcription_queue = queue.Queue()
         self.transcription_thread = threading.Thread(target=self._transcription_worker, daemon=True)
         self.transcription_thread.start()
 
+        self.apple_dictation = AppleSpeechRecognizer() if AppleSpeechRecognizer else None
+        self._dictation_starting = False
+        if self.apple_dictation is None:
+            self.chk_live_dictation.setEnabled(False)
+            self.live_dictation_label.setText("Live dictation: unavailable (Speech framework missing)")
+
+        self.dictation_timer = QTimer()
+        self.dictation_timer.setInterval(200)
+        self.dictation_timer.timeout.connect(self._refresh_live_dictation)
+        self.dictation_timer.start()
+
     def _transcription_worker(self) -> None:
         while True:
-            try:
-                task = self.transcription_queue.get()
-                if task is None:
-                    break
-                session_dir, speaker = task
-                if not session_dir or not session_dir.exists():
-                    self.transcription_queue.task_done()
-                    continue
-                
-                # Use SessionTranscriber logic here
-                try:
-                    transcriber = SessionTranscriber(session_dir, speaker)
-                    transcriber.run()
-                    # print(f"Background transcription complete for {session_dir.name}")
-                except Exception as e:
-                    print(f"Transcription error for {session_dir}: {e}")
-                
+            task = self.transcription_queue.get()
+            if task is None:
                 self.transcription_queue.task_done()
-            except Exception as e:
-                print(f"Worker loop error: {e}")
+                break
+            try:
+                if task.kind == "session":
+                    self._run_session_transcription(task)
+                elif task.kind == "clip":
+                    self._run_clip_transcription(task)
+            except Exception as exc:
+                print(f"Worker loop error: {exc}")
+            finally:
+                self.transcription_queue.task_done()
+
+    def _queue_session_transcription(self, session_dir: Path, speaker: str) -> None:
+        self.transcription_queue.put(
+            TranscriptionTask(kind="session", session_dir=session_dir, speaker=speaker)
+        )
+
+    def _queue_clip_transcription(self, audio_path: Path, speaker: str) -> None:
+        self.transcription_queue.put(
+            TranscriptionTask(kind="clip", audio_path=audio_path, speaker=speaker)
+        )
+
+    def _run_session_transcription(self, task: TranscriptionTask) -> None:
+        session_dir = task.session_dir
+        if not session_dir or not session_dir.exists():
+            return
+        if whisper is None:
+            print("Whisper unavailable; skipping session transcription.")
+            return
+        try:
+            transcriber = SessionTranscriber(session_dir, task.speaker)
+            transcriber.run()
+        except Exception as exc:
+            print(f"Transcription error for {session_dir}: {exc}")
+
+    def _run_clip_transcription(self, task: TranscriptionTask) -> None:
+        audio_path = task.audio_path
+        if not audio_path or not audio_path.exists():
+            return
+        if whisper is None:
+            print("Whisper unavailable; skipping clip transcription.")
+            return
+        try:
+            transcribe_clip(audio_path, task.speaker)
+        except Exception as exc:
+            print(f"Clip transcription error for {audio_path}: {exc}")
+
+    def _sync_live_dictation(self) -> None:
+        if self.apple_dictation is None:
+            return
+        if not self.chk_live_dictation.isChecked():
+            self._stop_live_dictation()
+            return
+        if self.recording_modes:
+            self._start_live_dictation()
+        else:
+            self._stop_live_dictation()
+
+    def _start_live_dictation(self) -> None:
+        if self.apple_dictation is None or self.apple_dictation.is_running():
+            return
+        if self._dictation_starting:
+            return
+        self._dictation_starting = True
+
+        def runner() -> None:
+            try:
+                self.apple_dictation.clear_error()
+                self.apple_dictation.start()
+            finally:
+                self._dictation_starting = False
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _stop_live_dictation(self) -> None:
+        if self.apple_dictation is None:
+            return
+        if self.apple_dictation.is_running():
+            self.apple_dictation.stop()
+
+    def _refresh_live_dictation(self) -> None:
+        if self.apple_dictation is None:
+            return
+        if not self.chk_live_dictation.isChecked():
+            self.live_dictation_label.setText("Live dictation: (disabled)")
+            return
+        if not self.recording_modes:
+            self.live_dictation_label.setText("Live dictation: ready (start recording)")
+            return
+        error = self.apple_dictation.get_error()
+        if error:
+            self.live_dictation_label.setText(f"Live dictation: {error}")
+            return
+        text = self.apple_dictation.get_text()
+        if text:
+            self.live_dictation_label.setText(f"Live dictation: {text}")
+        else:
+            self.live_dictation_label.setText("Live dictation: listening...")
 
     def poll_state_file(self) -> None:
         try:
@@ -411,7 +596,7 @@ class RecorderUI(QWidget):
             self.bucket_label.setText("NO BUCKET")
             self.bucket_label.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px; color: #555;")
             return
-        
+
         hue = sum(ord(c) for c in snapshot.bucketId) % 360
         # HSL(hue, 70%, 80%) approx HSL(hue, 178, 204) in Qt (0-255 range)
         self.bucket_label.setText(snapshot.bucketId)
@@ -427,8 +612,15 @@ class RecorderUI(QWidget):
             f"State: {snapshot.bucketId} · {snapshot.imageId} ({snapshot.path or ''})"
         )
         self.last_snapshot = snapshot
-        for session in self.sessions.values():
-            session.on_state_change(snapshot)
+        speaker = self.subject.text().strip() or "me"
+        for mode, session in self.sessions.items():
+            finished_clip = session.on_state_change(snapshot)
+            if (
+                finished_clip
+                and mode == "segmented"
+                and self.chk_whisper_photo.isChecked()
+            ):
+                self._queue_clip_transcription(finished_clip, speaker)
         if (
             self.chk_auto_start.isChecked()
             and not self.recording_modes
@@ -470,24 +662,29 @@ class RecorderUI(QWidget):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self._emit_recorder_state()
+        self._sync_live_dictation()
         if auto_trigger:
             self.state_label.setText(self.state_label.text() + "\n(Auto-started)")
 
     def stop_recording(self) -> None:
-        completed: List[Tuple[str, Optional[Path]]] = []
+        completed: List[Tuple[str, Optional[Path], Optional[Path]]] = []
         for mode in list(self.recording_modes):
-            path = self.sessions[mode].stop()
-            completed.append((mode, path))
+            session_dir, last_clip = self.sessions[mode].stop()
+            completed.append((mode, session_dir, last_clip))
         self.recording_modes.clear()
         self._update_indicator(False)
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self._emit_recorder_state()
+        self._stop_live_dictation()
         speaker = self.subject.text().strip() or "me"
-        for mode, path in completed:
-            if mode == "segmented" and path:
-                # Queue for background transcription instead of blocking
-                self.transcription_queue.put((path, speaker))
+        for mode, session_dir, last_clip in completed:
+            if mode != "segmented":
+                continue
+            if self.chk_whisper_photo.isChecked() and last_clip:
+                self._queue_clip_transcription(last_clip, speaker)
+            if self.chk_whisper_session.isChecked() and session_dir:
+                self._queue_session_transcription(session_dir, speaker)
 
     def _selected_modes(self) -> set[str]:
         modes: set[str] = set()
@@ -683,14 +880,14 @@ class SessionTranscriber:
         if not audio_files:
             return "No audio clips to transcribe."
         try:
-            self.model = whisper.load_model(DEFAULT_WHISPER_MODEL)
+            self.model = get_whisper_model()
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(f"Failed to load Whisper model '{DEFAULT_WHISPER_MODEL}': {exc}") from exc
         transcripts: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
         session_id = None
         processed = 0
         for audio_path in audio_files:
-            meta = self._load_clip_meta(audio_path)
+            meta = load_clip_meta(audio_path)
             if not meta or not meta.get("bucketId"):
                 continue
             session_id = session_id or meta.get("sessionId")
@@ -700,20 +897,11 @@ class SessionTranscriber:
             image_id = meta.get("imageId") or ""
             transcripts[str(meta["bucketId"])].append((image_id, text))
             processed += 1
-            self._write_transcript_file(audio_path, text)
+            write_transcript_file(audio_path, text)
         if not processed:
             return "No usable clips to transcribe."
         applied = apply_voice_transcripts(transcripts, self.speaker, session_id)
         return f"Transcribed {processed} clip(s) into {applied} bucket note(s)."
-
-    def _load_clip_meta(self, wav_path: Path) -> Optional[dict]:
-        meta_path = wav_path.with_suffix(".json")
-        if not meta_path.exists():
-            return None
-        try:
-            return json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
 
     def _transcribe_file(self, wav_path: Path) -> str:
         assert self.model is not None
@@ -722,15 +910,6 @@ class SessionTranscriber:
         except Exception:  # pragma: no cover
             return ""
         return (result.get("text") or "").strip()
-
-    def _write_transcript_file(self, wav_path: Path, text: str) -> None:
-        if not text:
-            return
-        txt_path = wav_path.with_suffix(".txt")
-        try:
-            txt_path.write_text(text.strip() + "\n", encoding="utf-8")
-        except OSError:
-            pass
 
 
 def apply_voice_transcripts(
@@ -791,7 +970,7 @@ def main() -> None:
     TRANSCRIPTS_ROOT.mkdir(parents=True, exist_ok=True)
     app = QApplication([])
     ui = RecorderUI()
-    ui.resize(1100, 140)
+    ui.resize(1100, 230)
     ui.show()
     app.exec()
 
