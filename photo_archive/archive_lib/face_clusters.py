@@ -12,6 +12,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
+from .base_stores import BaseJSONStore
 from .face_matcher import FaceMatcher, FaceRecord
 
 MIN_CONF_FOR_CLUSTER = 0.75
@@ -240,28 +241,27 @@ class FaceClusterBuilder:
         return stats
 
 
-class FaceClusterStore:
+class FaceClusterStore(BaseJSONStore):
     """JSON-backed cache for cluster entries."""
 
     VERSION = 1
 
     def __init__(self, path: Path) -> None:
-        self.path = path
-        self._data: Dict[str, object] = {}
+        super().__init__(path)
         self._clusters: List[Dict[str, object]] = []
         self._cluster_index: Dict[str, Dict[str, object]] = {}
-        self._load()
+        self._rebuild_index()
 
     def clusters(self) -> List[Dict[str, object]]:
+        """Return list of all clusters."""
         return list(self._clusters)
 
     def get(self, cluster_id: str) -> Optional[Dict[str, object]]:
-        entry = self._cluster_index.get(cluster_id)
-        if entry is None:
-            return None
-        return entry
+        """Get a specific cluster by ID."""
+        return self._cluster_index.get(cluster_id)
 
     def metadata(self) -> Dict[str, object]:
+        """Return metadata about the clustering."""
         generated_at = self._data.get("generated_at")
         generated_iso = self._data.get("generated_at_iso")
         return {
@@ -274,9 +274,11 @@ class FaceClusterStore:
         }
 
     def signature(self) -> str:
+        """Return the signature of the current clustering."""
         return str(self._data.get("signature") or "")
 
     def is_compatible(self, signature: str) -> bool:
+        """Check if the current clustering is compatible with a signature."""
         if not signature:
             return False
         return bool(self._clusters) and self.signature() == signature
@@ -289,6 +291,7 @@ class FaceClusterStore:
         params: Optional[Dict[str, object]] = None,
         stats: Optional[Dict[str, object]] = None,
     ) -> None:
+        """Write new clusters to the store."""
         payload = {
             "version": self.VERSION,
             "generated_at": int(time.time()),
@@ -298,16 +301,16 @@ class FaceClusterStore:
             "stats": stats or {},
             "clusters": list(clusters),
         }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp_path.replace(self.path)
-        self._data = payload
-        self._clusters = list(clusters)
-        self._rebuild_index()
+        with self.lock:
+            self._data = payload
+            self._clusters = list(clusters)
+            self._write()
+            self._rebuild_index()
 
     def _load(self) -> None:
-        if not self.path.exists():
+        """Load clusters from JSON file."""
+        super()._load()
+        if not self._data:
             self._data = {
                 "version": self.VERSION,
                 "generated_at": None,
@@ -317,24 +320,15 @@ class FaceClusterStore:
                 "stats": {},
                 "clusters": [],
             }
-            self._clusters = []
-            self._cluster_index = {}
-            return
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        clusters = payload.get("clusters")
+        clusters = self._data.get("clusters")
         if isinstance(clusters, list):
             self._clusters = clusters
         else:
             self._clusters = []
-        self._data = payload
         self._rebuild_index()
 
     def _rebuild_index(self) -> None:
+        """Rebuild the cluster ID index."""
         self._cluster_index = {}
         for entry in self._clusters:
             cluster_id = entry.get("cluster_id")
