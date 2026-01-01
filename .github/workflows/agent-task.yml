@@ -27,24 +27,38 @@ jobs:
           git config user.email "actions@github.com"
 
       - name: Run Claude Code to implement
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          echo "Implementing issue #${{ github.event.issue.number }}..."
-          claude -p "You are implementing GitHub issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}
+          echo "Implementing issue #${ISSUE_NUMBER}..."
 
-          Issue description:
-          ${{ github.event.issue.body }}
+          # Write issue body to temp file safely
+          printf '%s' "$ISSUE_BODY" > /tmp/issue_body.txt
 
-          Instructions:
-          1. Create a feature branch named 'feature/issue-${{ github.event.issue.number }}'
-          2. Implement the requested feature/refactoring
-          3. Commit your changes with a clear message
-          4. Push the branch using: git push -u origin feature/issue-${{ github.event.issue.number }}
-          5. Create a PR using gh CLI that references 'Closes #${{ github.event.issue.number }}'
-          6. Wait for CI to complete by checking the PR status (if CI exists)
-          7. If CI fails, read the logs, fix the issue, and push again (max 2 retries)
-          8. Post a status comment in the PR when done
+          # Build the prompt using printf to avoid shell interpretation
+          printf '%s\n' \
+            "You are implementing GitHub issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
+            "" \
+            "Issue description:" \
+            "$(cat /tmp/issue_body.txt)" \
+            "" \
+            "Instructions:" \
+            "1. Create a feature branch named 'feature/issue-${ISSUE_NUMBER}'" \
+            "2. Implement the requested feature/refactoring exactly as described" \
+            "3. Commit your changes with a clear, descriptive message" \
+            "4. Push the branch using: git push -u origin feature/issue-${ISSUE_NUMBER}" \
+            "5. Create a PR using gh CLI that references 'Closes #${ISSUE_NUMBER}'" \
+            "6. If there are tests, run them and ensure they pass" \
+            "7. If tests or checks fail, read the logs, fix the issue, and push again (max 2 retries)" \
+            "8. Post a brief status comment in the PR when done" \
+            "" \
+            "Work carefully and ensure all validation passes before marking as ready for review." \
+            > /tmp/full_prompt.txt
 
-          Work carefully and ensure all tests pass before marking as ready for review." \
+          # Run claude with the prompt file
+          claude -p "$(cat /tmp/full_prompt.txt)" \
             --allowedTools "Read,Edit,Write,Bash,Glob,Grep,TodoWrite" \
             --max-turns 100
 
