@@ -19,6 +19,7 @@ from archive_lib.decisions import DecisionStore
 from archive_lib.face_tags import FaceTagStore
 from archive_lib.publish import JPEG_QUALITY, PUBLISHED_FILENAME_TEMPLATE
 from archive_lib.reporting import BucketInfo, load_bucket_infos
+from archive_lib.variant_selector import build_variant_index, select_variant as _select_variant_base
 
 VALID_COPY_MODES = {"copy", "hardlink", "symlink"}
 VALID_VARIANT_POLICIES = {"hybrid", "original_only", "ai_only"}
@@ -77,22 +78,20 @@ def _load_people(people: Sequence[str], people_file: Optional[Path]) -> List[str
     return names
 
 
-def _variant_index(info: BucketInfo) -> Dict[str, Dict[str, object]]:
-    index: Dict[str, Dict[str, object]] = {}
-    for variant in info.variants:
-        role = variant.get("role")
-        if role and role not in index:
-            index[role] = variant
-    return index
-
-
 def _select_variant(
     info: BucketInfo,
     decisions: Dict[str, object],
     variant_policy: str,
 ) -> Tuple[Optional[Dict[str, object]], Optional[str], Optional[str]]:
-    variant_map = _variant_index(info)
+    """Select variant based on policy and user decisions.
+
+    Returns:
+        Tuple of (variant_dict, role_string, skip_reason)
+    """
+    variant_map = build_variant_index(info.variants)
     preferred = info.preferred_variant or ""
+
+    # Handle explicit preferred variant override
     if preferred and preferred in variant_map:
         return variant_map[preferred], preferred, None
 
@@ -102,44 +101,46 @@ def _select_variant(
         raise ValueError(f"Unsupported variant policy {variant_policy}")
 
     flag_creepy = decision_choice == "flag_creepy"
+
+    # Determine AI preference based on policy and decision
     prefer_ai = variant_policy == "hybrid"
     if decision_choice == "prefer_original":
         prefer_ai = False
     elif decision_choice == "prefer_ai":
         prefer_ai = True
 
+    # Handle ai_only policy
     if variant_policy == "ai_only":
         if flag_creepy:
             return None, None, "flag_creepy"
-        variant = variant_map.get(AI_ROLE)
+        variant = _select_variant_base(info.variants, prefer_ai=True, preferred_role=AI_ROLE)
         if variant:
             return variant, AI_ROLE, None
         return None, None, "missing_ai"
 
-    original_roles = (PROXY_ROLE, RAW_ROLE)
-
+    # Handle original_only policy
     if variant_policy == "original_only":
-        for role in original_roles:
-            variant = variant_map.get(role)
-            if variant:
-                return variant, role, None
+        # Try proxy first, then raw
+        for role in (PROXY_ROLE, RAW_ROLE):
+            if role in variant_map:
+                return variant_map[role], role, None
         return None, None, "missing_original"
 
+    # Handle hybrid policy with creepy flag
     allow_ai = not flag_creepy
-    if prefer_ai and allow_ai:
-        variant = variant_map.get(AI_ROLE)
+    if not allow_ai:
+        # Can't use AI, so force original preference
+        variant = _select_variant_base(info.variants, prefer_ai=False)
         if variant:
-            return variant, AI_ROLE, None
-
-    for role in original_roles:
-        variant = variant_map.get(role)
-        if variant:
+            role = variant.get("role")
             return variant, role, None
+        return None, None, "no_variant"
 
-    if allow_ai:
-        variant = variant_map.get(AI_ROLE)
-        if variant:
-            return variant, AI_ROLE, None
+    # Normal hybrid selection with AI preference
+    variant = _select_variant_base(info.variants, prefer_ai=prefer_ai)
+    if variant:
+        role = variant.get("role")
+        return variant, role, None
 
     return None, None, "no_variant"
 

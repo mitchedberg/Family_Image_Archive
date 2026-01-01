@@ -17,6 +17,7 @@ from .config import AppConfig
 from . import hashing
 from .reporting import BucketInfo, load_bucket_infos
 from .ingest.assigner import AI_FRONT, PROXY_FRONT, RAW_FRONT, BUCKET_PREFIX_LENGTH
+from .variant_selector import build_variant_index, select_variant as _select_variant_base
 
 
 @dataclass
@@ -34,49 +35,43 @@ def select_variant(
     prefer_ai: bool,
     include_ai_only: bool,
 ) -> Tuple[Optional[Dict[str, object]], Optional[str]]:
-    variants_by_role = _variants_by_role(info.variants)
-    has_proxy = "proxy_front" in variants_by_role
-    has_raw = "raw_front" in variants_by_role
+    """Select best variant from bucket info.
+
+    This wrapper preserves publish.py's include_ai_only logic while using
+    the centralized variant selection utility.
+    """
+    variants_by_role = build_variant_index(info.variants)
+    has_proxy = PROXY_FRONT in variants_by_role
+    has_raw = RAW_FRONT in variants_by_role
     has_ai = AI_FRONT in variants_by_role
     ai_only = not (has_proxy or has_raw) and has_ai
 
-    if info.preferred_variant and info.preferred_variant in variants_by_role:
-        return variants_by_role[info.preferred_variant], None
+    # Handle explicit preferred variant override
+    if info.preferred_variant:
+        variant = _select_variant_base(info.variants, preferred_role=info.preferred_variant)
+        if variant:
+            return variant, None
 
+    # Handle ai_only filtering
     if ai_only and not include_ai_only:
         return None, "ai_only"
 
-    if prefer_ai:
-        order = [AI_FRONT, PROXY_FRONT, RAW_FRONT]
-    else:
-        order = [PROXY_FRONT, RAW_FRONT]
-        if include_ai_only:
-            order.append(AI_FRONT)
+    # Use centralized selection with appropriate preference
+    variant = _select_variant_base(info.variants, prefer_ai=prefer_ai)
 
-    for role in order:
-        if role == AI_FRONT and not include_ai_only and not prefer_ai:
-            continue
-        variant = variants_by_role.get(role)
-        if variant:
-            if role == AI_FRONT and not include_ai_only and not has_proxy and not has_raw:
-                continue
-            return variant, None
+    # Apply include_ai_only constraints
+    if variant:
+        role = variant.get("role")
+        # If we got AI but shouldn't include AI-only, check if it's truly ai_only
+        if role == AI_FRONT and not include_ai_only and ai_only:
+            return None, "ai_only"
+        return variant, None
 
+    # If centralized selector found nothing, check if we should include AI-only as last resort
     if has_ai and include_ai_only:
         return variants_by_role.get(AI_FRONT), None
 
     return None, "no_variant"
-
-
-def _variants_by_role(variants: Sequence[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
-    role_map: Dict[str, Dict[str, object]] = {}
-    for variant in variants:
-        role = variant.get("role")
-        if not role:
-            continue
-        if role not in role_map or variant.get("is_primary"):
-            role_map[role] = variant
-    return role_map
 
 
 class Publisher:
