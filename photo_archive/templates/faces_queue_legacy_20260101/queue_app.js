@@ -293,10 +293,6 @@
       drawStart: null,
       drawBox: null,
       drawBoxEl: null,
-      draggingManualBox: false,
-      dragManualBoxId: null,
-      dragManualBoxStart: null,
-      dragManualBoxOriginalBBox: null,
       navLocked: false,
       navToken: 0,
       externalSource: '',
@@ -322,7 +318,6 @@
       naming: false,
       bucketFaces: {},
       heroToken: 0,
-      overlayCleanup: null,
       activeClusterMeta: null,
     },
   };
@@ -961,12 +956,8 @@
     const candidateImage = document.createElement('div');
     candidateImage.className = 'candidate-image';
     const img = document.createElement('img');
-    img.src = state.candidate.image || state.candidate.image_url || '';
+    img.src = state.candidate.image;
     img.alt = `Bucket ${state.candidate.bucket_prefix}`;
-    img.addEventListener('error', () => {
-      console.warn('Failed to load candidate image:', img.src);
-      img.alt = 'Image failed to load';
-    }, { once: true });
     candidateImage.appendChild(img);
     const overlayLayer = document.createElement('div');
     overlayLayer.className = 'candidate-image__overlay';
@@ -3225,52 +3216,15 @@
     });
   }
 
-  function buildOverlayResizeCleanup(onResize, targets = []) {
-    let rafId = null;
-    const schedule = () => {
-      if (rafId !== null) return;
-      rafId = window.requestAnimationFrame(() => {
-        rafId = null;
-        onResize();
-      });
-    };
-    const cleanupFns = [];
-    const resizeListener = () => schedule();
-    window.addEventListener('resize', resizeListener);
-    cleanupFns.push(() => window.removeEventListener('resize', resizeListener));
-    if (typeof ResizeObserver !== 'undefined') {
-      const observer = new ResizeObserver(() => schedule());
-      targets.forEach((target) => {
-        if (target) observer.observe(target);
-      });
-      cleanupFns.push(() => observer.disconnect());
-    }
-    return () => {
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      cleanupFns.forEach((fn) => {
-        try {
-          fn();
-        } catch (error) {
-          console.warn('Failed to clean overlay resize handler', error);
-        }
-      });
-    };
-  }
-
   function installPhotoOverlayObserver() {
-    if (!photoHeroImage) {
+    if (typeof ResizeObserver === 'undefined' || !photoHeroImage) {
       return;
     }
-    state.photo.overlayCleanup = buildOverlayResizeCleanup(
-      () => {
-        applyPhotoZoom();
-        renderPhotoOverlay();
-      },
-      [photoHeroImage, photoZoomCanvas, photoHeroImg]
-    );
+    const observer = new ResizeObserver(() => {
+      renderPhotoOverlay();
+    });
+    observer.observe(photoHeroImage);
+    state.photo.overlayCleanup = () => observer.disconnect();
   }
 
   function teardownPhotoOverlayObserver() {
@@ -3378,16 +3332,6 @@
         button.textContent = `Assign to ${state.activeLabel}`;
       }
       actions.appendChild(button);
-      if (face.manual && face.manualBoxId) {
-        const deleteBtn = document.createElement('button');
-        deleteBtn.type = 'button';
-        deleteBtn.className = 'photo-face-item__delete';
-        deleteBtn.dataset.faceAction = 'delete';
-        deleteBtn.dataset.manualBoxId = face.manualBoxId;
-        deleteBtn.textContent = 'Delete';
-        deleteBtn.title = 'Delete this manual box (Del/Backspace)';
-        actions.appendChild(deleteBtn);
-      }
       item.appendChild(actions);
       fragment.appendChild(item);
     });
@@ -3401,7 +3345,7 @@
       state.photo.suppressOverlayClick = false;
       return;
     }
-    if (state.photo.drawMode || state.photo.drawing || state.photo.draggingManualBox) {
+    if (state.photo.drawMode || state.photo.drawing) {
       return;
     }
     const target = event.target.closest('.candidate-face-box');
@@ -3423,11 +3367,6 @@
       return;
     }
     const actionButton = event.target.closest('button[data-face-action]');
-    if (actionButton?.dataset.faceAction === 'delete' && actionButton.dataset.manualBoxId) {
-      event.preventDefault();
-      deleteManualBox(actionButton.dataset.manualBoxId);
-      return;
-    }
     if (actionButton?.dataset.faceAction === 'assign' && actionButton.dataset.faceId) {
       event.preventDefault();
       assignFaceToActiveLabel(actionButton.dataset.faceId);
@@ -4317,11 +4256,6 @@
       handlePhotoDrawStart(event);
       return;
     }
-    const manualBox = event.target.closest('.candidate-face-box--manual');
-    if (manualBox && manualBox.dataset.manualBoxId) {
-      handleManualBoxDragStart(event, manualBox);
-      return;
-    }
     if (event.target.closest('.candidate-face-box')) return;
     if (!photoHeroImage) return;
     isPhotoPanning = true;
@@ -4340,10 +4274,6 @@
       handlePhotoDrawMove(event);
       return;
     }
-    if (state.photo.draggingManualBox) {
-      handleManualBoxDragMove(event);
-      return;
-    }
     if (!isPhotoPanning || event.pointerId !== photoPanPointerId) return;
     const dx = event.clientX - photoPanLastX;
     const dy = event.clientY - photoPanLastY;
@@ -4360,10 +4290,6 @@
   function handlePhotoPanEnd(event) {
     if (state.photo.drawing) {
       handlePhotoDrawEnd(event);
-      return;
-    }
-    if (state.photo.draggingManualBox) {
-      handleManualBoxDragEnd(event);
       return;
     }
     if (!isPhotoPanning || event.pointerId !== photoPanPointerId) return;
@@ -4514,137 +4440,6 @@
     state.photo.drawStart = null;
   }
 
-  function handleManualBoxDragStart(event, boxElement) {
-    if (!photoHeroImage || !photoHeroImg) return;
-    if (!state.photo.heroImageLoaded) return;
-    const boxId = boxElement.dataset.manualBoxId;
-    if (!boxId) return;
-    const face = state.photo.faces.find((f) => f.manualBoxId === boxId);
-    if (!face?.bbox) return;
-    event.preventDefault();
-    state.photo.draggingManualBox = true;
-    state.photo.dragManualBoxId = boxId;
-    state.photo.dragManualBoxStart = getPhotoPointerRaw(event);
-    state.photo.dragManualBoxOriginalBBox = { ...face.bbox };
-    if (face.face_id) {
-      selectPhotoFace(face.face_id, { focusLabelFilter: false });
-    }
-    if (photoHeroImage.setPointerCapture) {
-      photoHeroImage.setPointerCapture(event.pointerId);
-    }
-  }
-
-  function handleManualBoxDragMove(event) {
-    if (!state.photo.draggingManualBox || !state.photo.dragManualBoxId) return;
-    if (!state.photo.dragManualBoxStart || !state.photo.dragManualBoxOriginalBBox) return;
-    if (!photoHeroImage || !photoHeroImg) return;
-    const current = getPhotoPointerRaw(event);
-    if (!current) return;
-    const metrics = getRenderedImageRect(photoHeroImage, photoHeroImg);
-    const deltaX = (current.x - state.photo.dragManualBoxStart.x) / metrics.drawWidth;
-    const deltaY = (current.y - state.photo.dragManualBoxStart.y) / metrics.drawHeight;
-    const originalBBox = state.photo.dragManualBoxOriginalBBox;
-    const newLeft = clamp01(originalBBox.left + deltaX);
-    const newTop = clamp01(originalBBox.top + deltaY);
-    const maxLeft = Math.max(0, 1 - originalBBox.width);
-    const maxTop = Math.max(0, 1 - originalBBox.height);
-    const clampedLeft = Math.min(newLeft, maxLeft);
-    const clampedTop = Math.min(newTop, maxTop);
-    const face = state.photo.faces.find((f) => f.manualBoxId === state.photo.dragManualBoxId);
-    if (face) {
-      face.bbox = {
-        left: clampedLeft,
-        top: clampedTop,
-        width: originalBBox.width,
-        height: originalBBox.height,
-      };
-      renderPhotoOverlay();
-    }
-  }
-
-  function handleManualBoxDragEnd(event) {
-    if (!state.photo.draggingManualBox || !state.photo.dragManualBoxId) return;
-    if (photoHeroImage?.releasePointerCapture && event.pointerId) {
-      photoHeroImage.releasePointerCapture(event.pointerId);
-    }
-    const boxId = state.photo.dragManualBoxId;
-    const face = state.photo.faces.find((f) => f.manualBoxId === boxId);
-    if (face?.bbox && state.photo.heroMeta) {
-      updateManualBoxBBox(boxId, face.bbox).then((success) => {
-        if (success) {
-          setPhotoStatus('Manual box moved.', 'success');
-        }
-      });
-    }
-    state.photo.draggingManualBox = false;
-    state.photo.dragManualBoxId = null;
-    state.photo.dragManualBoxStart = null;
-    state.photo.dragManualBoxOriginalBBox = null;
-    state.photo.suppressOverlayClick = true;
-  }
-
-  function updateManualBoxBBox(boxId, bbox) {
-    if (!state.photo.heroMeta) return Promise.resolve(false);
-    if (!boxId) return Promise.resolve(false);
-    return fetch('/api/photo/manual_box', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bucket_prefix: state.photo.heroMeta.bucket_prefix,
-        box_id: boxId,
-        bbox: bbox,
-      }),
-    })
-      .then(checkResponse)
-      .then((payload) => {
-        const updated = payload?.box;
-        if (updated) {
-          const entry = state.photo.manualBoxes.find((box) => box.manualBoxId === boxId);
-          if (entry) {
-            entry.bbox = updated.bbox;
-          }
-          const faceEntry = state.photo.faces.find((f) => f.manualBoxId === boxId);
-          if (faceEntry) {
-            faceEntry.bbox = updated.bbox;
-          }
-          renderPhotoOverlay();
-        }
-        return true;
-      })
-      .catch((error) => {
-        setPhotoStatus(error.message || 'Failed to move manual box.', 'error');
-        loadManualBoxes(state.photo.heroMeta?.bucket_prefix || '');
-        return false;
-      });
-  }
-
-  function deleteManualBox(boxId) {
-    if (!state.photo.heroMeta) return Promise.resolve(false);
-    if (!boxId) return Promise.resolve(false);
-    return fetch('/api/photo/manual_box', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bucket_prefix: state.photo.heroMeta.bucket_prefix,
-        box_id: boxId,
-        delete: true,
-      }),
-    })
-      .then(checkResponse)
-      .then(() => {
-        state.photo.manualBoxes = state.photo.manualBoxes.filter((box) => box.manualBoxId !== boxId);
-        applyPhotoFaceFilters();
-        renderPhotoFaceList();
-        renderPhotoOverlay();
-        setPhotoStatus('Manual box deleted.', 'success');
-        return true;
-      })
-      .catch((error) => {
-        setPhotoStatus(error.message || 'Failed to delete manual box.', 'error');
-        return false;
-      });
-  }
-
   function handlePhotoModeHotkeys(event, key) {
     if (event.repeat && (key === 'arrowright' || key === 'arrowleft')) {
       return true;
@@ -4727,16 +4522,6 @@
     if (key === 'g' && !state.photo.viewingGrid) {
       showPhotoGrid(true);
       return true;
-    }
-    if (key === 'delete' || key === 'backspace') {
-      if (state.photo.activeFaceId) {
-        const activeFace = state.photo.faces.find((f) => f.face_id === state.photo.activeFaceId);
-        if (activeFace?.manual && activeFace.manualBoxId) {
-          event.preventDefault();
-          deleteManualBox(activeFace.manualBoxId);
-          return true;
-        }
-      }
     }
     return false;
   }
@@ -5302,7 +5087,6 @@
     state.clusters.faces = [];
     state.clusters.activeIndex = 0;
     state.clusters.detailError = '';
-    teardownClusterOverlayObserver();
     renderClusterView();
     renderClusterGrid();
     setClusterStatus('');
@@ -5556,47 +5340,8 @@
     setClusterActiveFace(next);
   }
 
-  function filterClusterFaces(faces) {
-    if (!Array.isArray(faces)) return [];
-    if (state.clusters.showLowConf) {
-      return faces.slice();
-    }
-    return faces.filter(
-      (face) => (face.confidence || 0) >= 0.75 && getFaceArea(face) >= 0.003
-    );
-  }
-
-  function renderClusterOverlaySnapshot() {
-    if (!clusterHeroOverlay || !clusterHeroWrapper || !clusterHeroImg) return;
-    const face = getActiveClusterFace();
-    if (!face) return;
-    const bucket = face.bucket_prefix;
-    const cached = bucket ? state.clusters.bucketFaces[bucket] : null;
-    const source = Array.isArray(cached) && cached.length ? cached : [face];
-    const filtered = filterClusterFaces(source);
-    renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
-  }
-
-  function installClusterOverlayObserver() {
-    if (!clusterHeroWrapper) return;
-    state.clusters.overlayCleanup = buildOverlayResizeCleanup(
-      () => {
-        renderClusterOverlaySnapshot();
-      },
-      [clusterHeroWrapper, clusterHeroImg]
-    );
-  }
-
-  function teardownClusterOverlayObserver() {
-    if (typeof state.clusters.overlayCleanup === 'function') {
-      state.clusters.overlayCleanup();
-    }
-    state.clusters.overlayCleanup = null;
-  }
-
   function renderClusterHero() {
     if (!clusterHeroImg || !clusterHeroOverlay || !clusterHeroWrapper) return;
-    teardownClusterOverlayObserver();
     const face = getActiveClusterFace();
     if (!face) {
       clusterHeroOverlay.innerHTML = '';
@@ -5622,14 +5367,12 @@
         throw new Error('Image decoded but has 0 naturalWidth');
       }
       drawClusterOverlay(face, token);
-      installClusterOverlayObserver();
     }).catch((err) => {
       if (state.clusters.heroToken !== token) return;
       console.warn('Image decode failed or naturalWidth 0, falling back to onload:', err);
       clusterHeroImg.onload = () => {
         if (state.clusters.heroToken !== token) return;
         requestAnimationFrame(() => drawClusterOverlay(face, token));
-        installClusterOverlayObserver();
       };
     });
 
@@ -5641,18 +5384,16 @@
   }
 
   function drawClusterOverlay(face, token) {
-    const renderFaces = (faces) => {
-      const filtered = filterClusterFaces(faces);
-      renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
-    };
     const bucket = face.bucket_prefix;
     if (!bucket) {
-      renderFaces([face]);
+      const filtered = [face].filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+      renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
       return;
     }
     const cache = state.clusters.bucketFaces[bucket];
     if (cache) {
-      renderFaces(cache);
+      const filtered = cache.filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+      renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
       return;
     }
     const params = new URLSearchParams({ variant: face.variant || '' });
@@ -5661,11 +5402,19 @@
       .then((payload) => {
         state.clusters.bucketFaces[bucket] = payload.faces || [];
         if (state.clusters.heroToken !== token) return;
-        renderFaces(state.clusters.bucketFaces[bucket]);
+        const filtered = state.clusters.bucketFaces[bucket].filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+        renderCandidateFacesOverlay(
+          clusterHeroOverlay,
+          clusterHeroWrapper,
+          clusterHeroImg,
+          filtered,
+          face.face_id
+        );
       })
       .catch(() => {
         if (state.clusters.heroToken !== token) return;
-        renderFaces([face]);
+        const filtered = [face].filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+        renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
       });
   }
 
@@ -5789,10 +5538,6 @@
       }
       if (face.manual) {
         box.classList.add('candidate-face-box--manual');
-        if (face.manualBoxId) {
-          box.dataset.manualBoxId = face.manualBoxId;
-        }
-        box.style.cursor = 'move';
       }
       if (face.face_id === activeFaceId) {
         box.classList.add('candidate-face-box--active');

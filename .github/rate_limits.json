@@ -1,8 +1,8 @@
 {
   "claude": {
-    "limited": false,
-    "reset_time": null,
-    "last_error": null,
+    "limited": true,
+    "reset_time": "unknown",
+    "last_error": "Rate limited",
     "last_updated": "2026-01-01T18:00:00Z"
   },
   "codex": {

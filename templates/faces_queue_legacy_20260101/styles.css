@@ -440,9 +440,7 @@ body {
 
 .candidate-face-box--active {
   border-color: #4cafef;
-  box-shadow: 0 0 0 2px rgba(76, 175, 239, 0.5), 0 0 14px rgba(76, 175, 239, 0.95);
-  background: rgba(76, 175, 239, 0.12);
-  z-index: 2;
+  box-shadow: 0 0 8px rgba(76, 175, 239, 0.8);
 }
 
 .candidate-face-box--labeled {
@@ -1517,12 +1515,6 @@ body {
   color: #e5e5e5;
 }
 
-.photo-face-item__actions {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
 .photo-face-item__actions button {
   border: 1px solid #2b2b2b;
   background: #161616;
@@ -1536,17 +1528,6 @@ body {
 .photo-face-item__actions button:disabled {
   opacity: 0.45;
   cursor: default;
-}
-
-.photo-face-item__delete {
-  background: #3a1010 !important;
-  border-color: #5a1a1a !important;
-  color: #ff9999 !important;
-}
-
-.photo-face-item__delete:hover:not(:disabled) {
-  background: #4a1515 !important;
-  border-color: #6a2020 !important;
 }
 
 .photo-priority-toggle {
@@ -1995,16 +1976,7 @@ body {
 }
 
 .cluster-face-list li.is-active {
-  background: rgba(76, 175, 239, 0.18);
-  box-shadow: inset 3px 0 0 rgba(76, 175, 239, 0.85), inset 0 0 0 1px rgba(76, 175, 239, 0.35);
-}
-
-.cluster-face-list li.is-active strong {
-  color: #e6f4ff;
-}
-
-.cluster-face-list li.is-active span {
-  color: #c6e7ff;
+  background: rgba(76, 175, 239, 0.15);
 }
 
 .cluster-face-list li span {
