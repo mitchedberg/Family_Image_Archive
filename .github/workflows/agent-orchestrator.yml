@@ -1,0 +1,249 @@
+name: Agent Orchestrator (Multi-Model Fallback)
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  orchestrate:
+    if: github.event.label.name == 'agent-auto' || github.event.label.name == 'agent-task'
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+      - name: Load and validate rate limit status
+        id: rate_limits
+        run: |
+          if [ -f .github/rate_limits.json ]; then
+            echo "Rate limits file exists, loading..."
+            cat .github/rate_limits.json
+
+            # Check if any limits should be cleared based on reset times
+            # TODO: Parse actual reset times when we have reliable formats
+            # For now, we rely on the scheduled retry job to clear limits
+          else
+            echo "No rate limits file, creating with all agents available"
+            echo '{"claude":{"limited":false,"reset_time":null,"last_error":null},"codex":{"limited":false,"reset_time":null,"last_error":null},"gemini":{"limited":false,"reset_time":null,"last_error":null}}' > .github/rate_limits.json
+          fi
+
+          # Output status for each agent to use in conditionals
+          echo "claude_limited=$(jq -r '.claude.limited' .github/rate_limits.json)" >> $GITHUB_OUTPUT
+          echo "codex_limited=$(jq -r '.codex.limited' .github/rate_limits.json)" >> $GITHUB_OUTPUT
+          echo "gemini_limited=$(jq -r '.gemini.limited' .github/rate_limits.json)" >> $GITHUB_OUTPUT
+
+      - name: Run Agent Orchestrator
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          echo "🤖 Orchestrating multi-agent task for issue #${ISSUE_NUMBER}..."
+          set -o pipefail
+
+          # Build the prompt
+          printf '%s' "$ISSUE_BODY" > /tmp/issue_body.txt
+          printf '%s\n' \
+            "You are implementing GitHub issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
+            "" \
+            "Issue description:" \
+            "$(cat /tmp/issue_body.txt)" \
+            "" \
+            "Instructions:" \
+            "1. Create a feature branch named 'feature/issue-${ISSUE_NUMBER}'" \
+            "2. Implement the requested feature/refactoring exactly as described" \
+            "3. Commit your changes with a clear, descriptive message" \
+            "4. Push the branch using: git push -u origin feature/issue-${ISSUE_NUMBER}" \
+            "5. Create a PR using gh CLI that references 'Closes #${ISSUE_NUMBER}'" \
+            "6. If there are tests, run them and ensure they pass" \
+            "7. Post a brief status comment in the PR when done" \
+            "" \
+            "Work carefully and ensure all validation passes before marking as ready for review." \
+            > /tmp/full_prompt.txt
+
+          SUCCESS=false
+          AGENT_USED=""
+          ERROR_LOG=""
+          CLAUDE_LIMITED="${{ steps.rate_limits.outputs.claude_limited }}"
+          CODEX_LIMITED="${{ steps.rate_limits.outputs.codex_limited }}"
+          GEMINI_LIMITED="${{ steps.rate_limits.outputs.gemini_limited }}"
+
+          echo "Current rate limit status:"
+          echo "  Claude: $([ "$CLAUDE_LIMITED" = "true" ] && echo "🚫 RATE LIMITED" || echo "✅ Available")"
+          echo "  Codex:  $([ "$CODEX_LIMITED" = "true" ] && echo "🚫 RATE LIMITED" || echo "✅ Available")"
+          echo "  Gemini: $([ "$GEMINI_LIMITED" = "true" ] && echo "🚫 RATE LIMITED" || echo "✅ Available")"
+          echo ""
+
+          # Try Claude Code first (if not known to be limited)
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ "$CLAUDE_LIMITED" = "true" ]; then
+            echo "🚫 Skipping Claude Code (known to be rate limited)"
+            echo "   Will be automatically retried when limit resets"
+          else
+            echo "🔵 Attempting with Claude Code..."
+            CLAUDE_LOG="/tmp/claude.log"
+            set +e
+            claude -p "$(cat /tmp/full_prompt.txt)" --allowedTools "Read,Edit,Write,Bash,Glob,Grep,TodoWrite" 2>&1 | tee "$CLAUDE_LOG"
+            CLAUDE_EXIT=${PIPESTATUS[0]}
+            set -e
+            ERROR_LOG=$(cat "$CLAUDE_LOG")
+
+            # Check for rate limit regardless of exit status
+            if echo "$ERROR_LOG" | grep -qi "hit your limit"; then
+              RESET_TIME=$(echo "$ERROR_LOG" | grep -oP "resets \K.*" || echo "unknown")
+              echo "🚫 Claude Code rate limited (resets: $RESET_TIME)"
+
+              # Update rate limits file
+              jq '.claude.limited = true | .claude.reset_time = "'"$RESET_TIME"'" | .claude.last_error = "Rate limited"' \
+                .github/rate_limits.json > /tmp/rate_limits.json && mv /tmp/rate_limits.json .github/rate_limits.json
+            elif [ "$CLAUDE_EXIT" -eq 0 ]; then
+              echo "✅ Claude Code succeeded!"
+              SUCCESS=true
+              AGENT_USED="Claude Code"
+            else
+              echo "❌ Claude Code failed with non-rate-limit error"
+            fi
+          fi
+
+          # Try Codex if Claude failed
+          if [ "$SUCCESS" = false ]; then
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            if [ "$CODEX_LIMITED" = "true" ]; then
+              echo "🚫 Skipping OpenAI Codex (known to be rate limited)"
+              echo "   Will be automatically retried when limit resets"
+            else
+              echo "🔴 Attempting with OpenAI Codex..."
+              CODEX_LOG="/tmp/codex.log"
+              set +e
+              codex exec --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox "$(cat /tmp/full_prompt.txt)" 2>&1 | tee "$CODEX_LOG"
+              CODEX_EXIT=${PIPESTATUS[0]}
+              set -e
+              ERROR_LOG=$(cat "$CODEX_LOG")
+
+              # Check for rate limit regardless of exit status
+              if echo "$ERROR_LOG" | grep -qiE "hit your usage limit|rate limit|quota"; then
+                RESET_TIME=$(echo "$ERROR_LOG" | grep -oP "try again at \K[^.]*" || echo "unknown")
+                echo "🚫 Codex rate limited (resets: $RESET_TIME)"
+
+                # Update rate limits file
+                jq '.codex.limited = true | .codex.reset_time = "'"$RESET_TIME"'" | .codex.last_error = "Rate limited"' \
+                  .github/rate_limits.json > /tmp/rate_limits.json && mv /tmp/rate_limits.json .github/rate_limits.json
+              elif [ "$CODEX_EXIT" -eq 0 ]; then
+                echo "✅ Codex succeeded!"
+                SUCCESS=true
+                AGENT_USED="OpenAI Codex"
+              else
+                echo "❌ Codex failed with non-rate-limit error"
+              fi
+            fi
+          fi
+
+          # Try Gemini if both Claude and Codex failed
+          if [ "$SUCCESS" = false ]; then
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            if [ "$GEMINI_LIMITED" = "true" ]; then
+              echo "🚫 Skipping Google Gemini (known to be rate limited)"
+              echo "   Will be automatically retried when limit resets"
+            else
+              echo "🟢 Attempting with Google Gemini..."
+              GEMINI_LOG="/tmp/gemini.log"
+              set +e
+              gemini --yolo "$(cat /tmp/full_prompt.txt)" 2>&1 | tee "$GEMINI_LOG"
+              GEMINI_EXIT=${PIPESTATUS[0]}
+              set -e
+              ERROR_LOG=$(cat "$GEMINI_LOG")
+
+              # Generic error detection for Gemini (don't know exact format yet)
+              if echo "$ERROR_LOG" | grep -qiE "(rate limit|quota|usage limit)"; then
+                echo "🚫 Gemini appears to be rate limited (error format unknown)"
+                jq '.gemini.limited = true | .gemini.reset_time = "unknown" | .gemini.last_error = "Possible rate limit"' \
+                  .github/rate_limits.json > /tmp/rate_limits.json && mv /tmp/rate_limits.json .github/rate_limits.json
+              elif [ "$GEMINI_EXIT" -eq 0 ]; then
+                echo "✅ Gemini succeeded!"
+                SUCCESS=true
+                AGENT_USED="Google Gemini"
+              else
+                echo "❌ Gemini failed with unknown error"
+              fi
+            fi
+          fi
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if [ "$SUCCESS" = true ]; then
+            echo "🎉 Task completed successfully using: $AGENT_USED"
+
+            # Commit updated rate limits if changed
+            if [ -n "$(git status --porcelain .github/rate_limits.json)" ]; then
+              git add .github/rate_limits.json
+              git commit -m "Update rate limits status [skip ci]"
+              git push
+            fi
+
+            echo "AGENT_USED=$AGENT_USED" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "❌ All agents failed or rate limited"
+
+            # Commit updated rate limits
+            if [ -n "$(git status --porcelain .github/rate_limits.json)" ]; then
+              git add .github/rate_limits.json
+              git commit -m "Update rate limits - all agents exhausted [skip ci]"
+              git push
+            fi
+
+            # Add label for retry later
+            gh issue edit ${ISSUE_NUMBER} --add-label "rate-limited-all-agents" --repo ${{ github.repository }}
+
+            exit 1
+          fi
+
+      - name: Verify PR was created
+        if: success()
+        run: |
+          pr_count=$(gh pr list --repo ${{ github.repository }} --search "Closes #${{ github.event.issue.number }}" --json number --jq '. | length')
+          if [ "$pr_count" -eq "0" ]; then
+            echo "⚠️  No PR was created for issue #${{ github.event.issue.number }}"
+            echo "This might be expected for simple tasks that don't require PRs"
+          else
+            echo "✓ PR successfully created for issue #${{ github.event.issue.number }}"
+          fi
+
+      - name: Post completion comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const agentUsed = process.env.AGENT_USED || 'Unknown';
+            let body;
+
+            if ('${{ job.status }}' === 'success') {
+              body = `✅ **Task completed successfully using ${agentUsed}**\n\nThe agent has finished processing this issue. Check for a new PR.`;
+            } else {
+              body = `❌ **All agents failed or are rate-limited**\n\nThis issue has been labeled \`rate-limited-all-agents\` and will be automatically retried when limits reset.\n\nCurrent status can be checked in \`.github/rate_limits.json\``;
+            }
+
+            await github.rest.issues.createComment({
+              issue_number: ${{ github.event.issue.number }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
