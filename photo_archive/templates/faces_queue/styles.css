@@ -1517,6 +1517,12 @@ body {
   color: #e5e5e5;
 }
 
+.photo-face-item__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .photo-face-item__actions button {
   border: 1px solid #2b2b2b;
   background: #161616;
@@ -1530,6 +1536,17 @@ body {
 .photo-face-item__actions button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.photo-face-item__delete {
+  background: #3a1010 !important;
+  border-color: #5a1a1a !important;
+  color: #ff9999 !important;
+}
+
+.photo-face-item__delete:hover:not(:disabled) {
+  background: #4a1515 !important;
+  border-color: #6a2020 !important;
 }
 
 .photo-priority-toggle {

@@ -1253,6 +1253,21 @@ class FaceQueueRequestHandler(SimpleHTTPRequestHandler):
             boxes = self.manual_box_store.list_boxes(bucket_prefix, None)
             self._write_json({"status": "ok", "bucket_prefix": bucket_prefix, "boxes": boxes})
             return
+        if "bbox" in payload and "box_id" in payload:
+            box_id = (payload.get("box_id") or "").strip()
+            if not box_id:
+                self.send_error(400, "box_id is required")
+                return
+            try:
+                updated = self.manual_box_store.update_bbox(bucket_prefix, box_id, payload.get("bbox") or {})
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+                return
+            if not updated:
+                self.send_error(404, "manual box not found")
+                return
+            self._write_json({"status": "ok", "bucket_prefix": bucket_prefix, "box": updated})
+            return
         if "bbox" in payload:
             side = (payload.get("side") or "front").strip().lower()
             try:

@@ -303,6 +303,52 @@ class ManualBoxStore(BaseJSONStore):
                 }
         return None
 
+    def update_bbox(self, bucket_prefix: str, box_id: str, bbox: Dict[str, float]) -> Optional[Dict[str, object]]:
+        """Update the bounding box for a box.
+
+        Args:
+            bucket_prefix: Bucket identifier
+            box_id: Box ID to update
+            bbox: New bounding box dict with left/top/width/height in [0,1]
+
+        Returns:
+            Updated box entry if found, None otherwise
+
+        Raises:
+            ValueError: If bucket_prefix or box_id is empty, or bbox is invalid
+        """
+        clean_bucket = (bucket_prefix or "").strip()
+        clean_id = (box_id or "").strip()
+        if not clean_bucket or not clean_id:
+            raise ValueError("bucket_prefix and box_id are required")
+        normalized_bbox = _normalize_manual_bbox(bbox)
+        if not normalized_bbox:
+            raise ValueError("bbox must include left/top/width/height between 0 and 1")
+        with self.lock:
+            boxes = self._data.setdefault("boxes", {})
+            rows = boxes.get(clean_bucket)
+            if not isinstance(rows, list):
+                return None
+            for entry in rows:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("id") != clean_id:
+                    continue
+                entry["bbox"] = normalized_bbox
+                entry["updated_at"] = int(time.time())
+                self._touch_locked()
+                self._write_locked()
+                return {
+                    "id": entry.get("id"),
+                    "side": entry.get("side") or "front",
+                    "bbox": _normalize_manual_bbox(entry.get("bbox")),
+                    "label": entry.get("label") or "",
+                    "face_index": entry.get("face_index"),
+                    "created_at": entry.get("created_at"),
+                    "updated_at": entry.get("updated_at"),
+                }
+        return None
+
     def remove_box(self, bucket_prefix: str, box_id: str) -> bool:
         """Remove a box by ID.
 
