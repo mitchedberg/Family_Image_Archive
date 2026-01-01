@@ -58,8 +58,8 @@ jobs:
 
           # Run Codex CLI in non-interactive mode (ChatGPT subscription-based)
           if command -v codex &> /dev/null; then
-            # Use exec --full-auto for non-interactive automation with file editing
-            codex exec --full-auto "$(cat /tmp/full_prompt.txt)"
+            # Use exec with --sandbox danger-full-access for git operations in isolated CI
+            codex exec --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox "$(cat /tmp/full_prompt.txt)"
           else
             echo "❌ Codex CLI not found. Please install with: npm install -g @openai/codex-cli"
             echo "Then authenticate with: codex login"
