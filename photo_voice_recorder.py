@@ -102,6 +102,8 @@ class AudioSession:
         self.audio_profile: Dict[str, object] = {"codec": "aac", "bitrate": 128000}
         self.current_clip_path: Optional[Path] = None
         self.device_index: Optional[int] = None
+        self.realtime_transcription_enabled = False
+        self.transcription_queue: Optional[queue.Queue] = None
 
     def start(
         self,
@@ -259,6 +261,13 @@ class AudioSession:
             self.current_clip_path = None
             if finished:
                 self._process_finished_clip(finished)
+                # Queue for real-time transcription if enabled and in segmented mode
+                if (
+                    self.mode == "segmented"
+                    and self.realtime_transcription_enabled
+                    and self.transcription_queue is not None
+                ):
+                    self._queue_clip_for_transcription(finished)
 
     def _on_audio(self, indata, frames, time_info, status) -> None:
         if status:
@@ -289,6 +298,13 @@ class AudioSession:
         except subprocess.CalledProcessError:
             return
 
+    def _queue_clip_for_transcription(self, clip_path: Path) -> None:
+        """Queue a single clip for real-time transcription."""
+        if not self.transcription_queue or not self.session_dir:
+            return
+        # Queue individual clip with its metadata
+        self.transcription_queue.put(("clip", clip_path, self.subject))
+
 
 class RecorderUI(QWidget):
     def __init__(self) -> None:
@@ -308,6 +324,9 @@ class RecorderUI(QWidget):
         self.chk_segmented.setChecked(True)
         self.chk_continuous = QCheckBox("Continuous")
         self.chk_auto_start = QCheckBox("Auto-start on first snapshot")
+        self.chk_realtime_transcribe = QCheckBox("Real-time transcription")
+        self.chk_realtime_transcribe.setChecked(False)
+        self.chk_realtime_transcribe.setToolTip("Enable background transcription as you move between images")
         self.audio_format_box = QComboBox()
         self.audio_format_box.addItems(["AAC 128 kbps (m4a)", "Apple Lossless (m4a)"])
         self.mic_box = QComboBox()
@@ -341,6 +360,7 @@ class RecorderUI(QWidget):
 
         manage_row = QHBoxLayout()
         manage_row.addWidget(self.chk_auto_start)
+        manage_row.addWidget(self.chk_realtime_transcribe)
         manage_row.addStretch()
         manage_row.addWidget(self.btn_transcribe_old)
 
@@ -374,22 +394,83 @@ class RecorderUI(QWidget):
                 task = self.transcription_queue.get()
                 if task is None:
                     break
-                session_dir, speaker = task
-                if not session_dir or not session_dir.exists():
-                    self.transcription_queue.task_done()
-                    continue
-                
-                # Use SessionTranscriber logic here
-                try:
-                    transcriber = SessionTranscriber(session_dir, speaker)
-                    transcriber.run()
-                    # print(f"Background transcription complete for {session_dir.name}")
-                except Exception as e:
-                    print(f"Transcription error for {session_dir}: {e}")
-                
+
+                # Handle both session-level and clip-level transcription
+                if isinstance(task, tuple) and len(task) >= 2:
+                    if task[0] == "clip":
+                        # Real-time clip transcription: ("clip", clip_path, speaker)
+                        _, clip_path, speaker = task
+                        if not clip_path or not Path(clip_path).exists():
+                            self.transcription_queue.task_done()
+                            continue
+                        try:
+                            self._transcribe_single_clip(clip_path, speaker)
+                        except Exception as e:
+                            print(f"Transcription error for clip {clip_path}: {e}")
+                    else:
+                        # Session-level transcription: (session_dir, speaker)
+                        session_dir, speaker = task
+                        if not session_dir or not session_dir.exists():
+                            self.transcription_queue.task_done()
+                            continue
+                        try:
+                            transcriber = SessionTranscriber(session_dir, speaker)
+                            transcriber.run()
+                        except Exception as e:
+                            print(f"Transcription error for {session_dir}: {e}")
+
                 self.transcription_queue.task_done()
             except Exception as e:
                 print(f"Worker loop error: {e}")
+
+    def _transcribe_single_clip(self, clip_path: Path, speaker: str) -> None:
+        """Transcribe a single clip and store the result."""
+        if whisper is None:
+            return
+
+        clip_path = Path(clip_path)
+
+        # Guard: Skip if already transcribed
+        txt_path = clip_path.with_suffix(".txt")
+        if txt_path.exists():
+            return
+
+        # Load metadata
+        meta_path = clip_path.with_suffix(".json")
+        if not meta_path.exists():
+            return
+
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        bucket_id = meta.get("bucketId")
+        if not bucket_id:
+            return
+
+        # Transcribe the clip
+        try:
+            model = whisper.load_model(DEFAULT_WHISPER_MODEL)
+            result = model.transcribe(str(clip_path), fp16=False)
+            text = (result.get("text") or "").strip()
+        except Exception:
+            return
+
+        if not text:
+            return
+
+        # Write transcript file alongside the clip
+        try:
+            txt_path.write_text(text + "\n", encoding="utf-8")
+        except OSError:
+            return
+
+        # Store in bucket transcript store
+        image_id = meta.get("imageId") or ""
+        session_id = meta.get("sessionId")
+        transcripts = {bucket_id: [(image_id, text)]}
+        apply_voice_transcripts(transcripts, speaker, session_id)
 
     def poll_state_file(self) -> None:
         try:
@@ -449,6 +530,13 @@ class RecorderUI(QWidget):
         subject = self.subject.text().strip() or "me"
         profile = self._current_audio_profile()
         device_index = self._selected_device_index()
+
+        # Enable real-time transcription on sessions if toggled
+        realtime_enabled = self.chk_realtime_transcribe.isChecked()
+        for mode in selected:
+            self.sessions[mode].realtime_transcription_enabled = realtime_enabled
+            self.sessions[mode].transcription_queue = self.transcription_queue
+
         try:
             for mode in selected:
                 self.sessions[mode].start(
@@ -717,6 +805,13 @@ class SessionTranscriber:
 
     def _transcribe_file(self, wav_path: Path) -> str:
         assert self.model is not None
+        # Guard: Skip if already transcribed
+        txt_path = wav_path.with_suffix(".txt")
+        if txt_path.exists():
+            try:
+                return txt_path.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
         try:
             result = self.model.transcribe(str(wav_path), fp16=False)
         except Exception:  # pragma: no cover
