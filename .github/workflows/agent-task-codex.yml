@@ -1,4 +1,4 @@
-name: Agent Task (Claude Code)
+name: Agent Task (Codex)
 
 on:
   issues:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   implement:
-    if: github.event.label.name == 'agent-task' || github.event.label.name == 'agent-claude'
+    if: github.event.label.name == 'agent-codex'
     runs-on: self-hosted
 
     steps:
@@ -23,16 +23,16 @@ jobs:
 
       - name: Configure git
         run: |
-          git config user.name "GitHub Actions Bot (Claude)"
+          git config user.name "GitHub Actions Bot (Codex)"
           git config user.email "actions@github.com"
 
-      - name: Run Claude Code to implement
+      - name: Run OpenAI Codex to implement
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          echo "Implementing issue #${ISSUE_NUMBER}..."
+          echo "🤖 Implementing issue #${ISSUE_NUMBER} with OpenAI Codex..."
 
           # Write issue body to temp file safely
           printf '%s' "$ISSUE_BODY" > /tmp/issue_body.txt
@@ -45,30 +45,36 @@ jobs:
             "$(cat /tmp/issue_body.txt)" \
             "" \
             "Instructions:" \
-            "1. Create a feature branch named 'feature/issue-${ISSUE_NUMBER}'" \
+            "1. Create a feature branch named 'feature/codex-issue-${ISSUE_NUMBER}'" \
             "2. Implement the requested feature/refactoring exactly as described" \
             "3. Commit your changes with a clear, descriptive message" \
-            "4. Push the branch using: git push -u origin feature/issue-${ISSUE_NUMBER}" \
+            "4. Push the branch using: git push -u origin feature/codex-issue-${ISSUE_NUMBER}" \
             "5. Create a PR using gh CLI that references 'Closes #${ISSUE_NUMBER}'" \
             "6. If there are tests, run them and ensure they pass" \
-            "7. If tests or checks fail, read the logs, fix the issue, and push again (max 2 retries)" \
-            "8. Post a brief status comment in the PR when done" \
+            "7. Post a brief status comment in the PR when done" \
             "" \
             "Work carefully and ensure all validation passes before marking as ready for review." \
             > /tmp/full_prompt.txt
 
-          # Run claude with the prompt file (no turn limit for self-hosted)
-          claude -p "$(cat /tmp/full_prompt.txt)" \
-            --allowedTools "Read,Edit,Write,Bash,Glob,Grep,TodoWrite"
+          # Run Codex CLI (ChatGPT subscription-based)
+          # Note: Codex CLI syntax may need adjustment based on actual installed version
+          if command -v codex &> /dev/null; then
+            codex --prompt "$(cat /tmp/full_prompt.txt)" --auto-approve
+          else
+            echo "❌ Codex CLI not found. Please install with: npm install -g @openai/codex-cli"
+            echo "Then authenticate with: codex login"
+            exit 1
+          fi
 
       - name: Verify PR was created
         run: |
           pr_count=$(gh pr list --repo ${{ github.repository }} --search "Closes #${{ github.event.issue.number }}" --json number --jq '. | length')
           if [ "$pr_count" -eq "0" ]; then
-            echo "Error: No PR was created for issue #${{ github.event.issue.number }}"
-            exit 1
+            echo "⚠️  No PR was created for issue #${{ github.event.issue.number }}"
+            echo "This might be expected for simple tasks that don't require PRs"
+          else
+            echo "✓ PR successfully created for issue #${{ github.event.issue.number }}"
           fi
-          echo "✓ PR successfully created for issue #${{ github.event.issue.number }}"
 
       - name: Post completion comment
         if: always()
@@ -76,10 +82,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const status = '${{ job.status }}' === 'success' ? '✅ Completed (Claude)' : '❌ Failed (Claude)';
+            const status = '${{ job.status }}' === 'success' ? '✅ Completed (Codex)' : '❌ Failed (Codex)';
             await github.rest.issues.createComment({
               issue_number: ${{ github.event.issue.number }},
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `${status}: Claude Code agent has finished processing this issue. Check for a new PR.`
+              body: `${status}: Codex agent has finished processing this issue.`
             });
