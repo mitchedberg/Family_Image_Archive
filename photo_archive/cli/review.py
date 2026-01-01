@@ -28,6 +28,7 @@ from archive_lib.reporting import BucketInfo, load_bucket_infos
 from archive_lib.photo_transforms import PhotoTransformStore
 from archive_lib.webimage import ensure_web_images
 from archive_lib.ocr import perform_ocr, vision_available, timestamp
+from archive_lib.variant_selector import build_variant_index
 
 VOICE_STATE_DIR = Path.home() / "PhotoVoiceNotes"
 VOICE_STATE_FILE = VOICE_STATE_DIR / "current_state.json"
@@ -134,7 +135,7 @@ def _build_dataset(
         has_ai = web_ai.exists()
         if not include_all and not has_ai:
             continue
-        variant_map = _variant_index(info.variants)
+        variant_map = build_variant_index(info.variants)
         finder_front_variant = variant_map.get("raw_front") or variant_map.get("proxy_front")
         display_back_variant = variant_map.get("proxy_back") or variant_map.get("raw_back")
         finder_back_variant = variant_map.get("raw_back") or variant_map.get("proxy_back")
@@ -309,13 +310,6 @@ def _merge_voice_transcripts(
     return merged
 
 
-def _variant_index(variants) -> Dict[str, object]:
-    index: Dict[str, object] = {}
-    for variant in variants or []:
-        role = getattr(variant, "role", None) or (variant.get("role") if isinstance(variant, dict) else None)
-        if role and role not in index:
-            index[role] = variant
-    return index
 
 
 def _build_orientation_meta(info, raw_variant) -> Dict[str, Optional[int]]:
@@ -528,7 +522,7 @@ def _linked_back_assets(cfg: config_mod.AppConfig, back_info: BucketInfo) -> Dic
     bucket_dir = cfg.buckets_dir / f"bkt_{back_info.bucket_prefix}"
     web_front = bucket_dir / "derived" / "web_front.jpg"
     thumb_front = bucket_dir / "derived" / "thumb_front.jpg"
-    variant_map = _variant_index(back_info.variants)
+    variant_map = build_variant_index(back_info.variants)
     finder_variant = variant_map.get("raw_front") or variant_map.get("proxy_front")
     review_root = cfg.staging_root / "02_WORKING_BUCKETS"
     return {
