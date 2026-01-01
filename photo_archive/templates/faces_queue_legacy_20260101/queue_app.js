@@ -318,7 +318,6 @@
       naming: false,
       bucketFaces: {},
       heroToken: 0,
-      overlayCleanup: null,
       activeClusterMeta: null,
     },
   };
@@ -3217,52 +3216,15 @@
     });
   }
 
-  function buildOverlayResizeCleanup(onResize, targets = []) {
-    let rafId = null;
-    const schedule = () => {
-      if (rafId !== null) return;
-      rafId = window.requestAnimationFrame(() => {
-        rafId = null;
-        onResize();
-      });
-    };
-    const cleanupFns = [];
-    const resizeListener = () => schedule();
-    window.addEventListener('resize', resizeListener);
-    cleanupFns.push(() => window.removeEventListener('resize', resizeListener));
-    if (typeof ResizeObserver !== 'undefined') {
-      const observer = new ResizeObserver(() => schedule());
-      targets.forEach((target) => {
-        if (target) observer.observe(target);
-      });
-      cleanupFns.push(() => observer.disconnect());
-    }
-    return () => {
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      cleanupFns.forEach((fn) => {
-        try {
-          fn();
-        } catch (error) {
-          console.warn('Failed to clean overlay resize handler', error);
-        }
-      });
-    };
-  }
-
   function installPhotoOverlayObserver() {
-    if (!photoHeroImage) {
+    if (typeof ResizeObserver === 'undefined' || !photoHeroImage) {
       return;
     }
-    state.photo.overlayCleanup = buildOverlayResizeCleanup(
-      () => {
-        applyPhotoZoom();
-        renderPhotoOverlay();
-      },
-      [photoHeroImage, photoZoomCanvas, photoHeroImg]
-    );
+    const observer = new ResizeObserver(() => {
+      renderPhotoOverlay();
+    });
+    observer.observe(photoHeroImage);
+    state.photo.overlayCleanup = () => observer.disconnect();
   }
 
   function teardownPhotoOverlayObserver() {
@@ -5125,7 +5087,6 @@
     state.clusters.faces = [];
     state.clusters.activeIndex = 0;
     state.clusters.detailError = '';
-    teardownClusterOverlayObserver();
     renderClusterView();
     renderClusterGrid();
     setClusterStatus('');
@@ -5379,47 +5340,8 @@
     setClusterActiveFace(next);
   }
 
-  function filterClusterFaces(faces) {
-    if (!Array.isArray(faces)) return [];
-    if (state.clusters.showLowConf) {
-      return faces.slice();
-    }
-    return faces.filter(
-      (face) => (face.confidence || 0) >= 0.75 && getFaceArea(face) >= 0.003
-    );
-  }
-
-  function renderClusterOverlaySnapshot() {
-    if (!clusterHeroOverlay || !clusterHeroWrapper || !clusterHeroImg) return;
-    const face = getActiveClusterFace();
-    if (!face) return;
-    const bucket = face.bucket_prefix;
-    const cached = bucket ? state.clusters.bucketFaces[bucket] : null;
-    const source = Array.isArray(cached) && cached.length ? cached : [face];
-    const filtered = filterClusterFaces(source);
-    renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
-  }
-
-  function installClusterOverlayObserver() {
-    if (!clusterHeroWrapper) return;
-    state.clusters.overlayCleanup = buildOverlayResizeCleanup(
-      () => {
-        renderClusterOverlaySnapshot();
-      },
-      [clusterHeroWrapper, clusterHeroImg]
-    );
-  }
-
-  function teardownClusterOverlayObserver() {
-    if (typeof state.clusters.overlayCleanup === 'function') {
-      state.clusters.overlayCleanup();
-    }
-    state.clusters.overlayCleanup = null;
-  }
-
   function renderClusterHero() {
     if (!clusterHeroImg || !clusterHeroOverlay || !clusterHeroWrapper) return;
-    teardownClusterOverlayObserver();
     const face = getActiveClusterFace();
     if (!face) {
       clusterHeroOverlay.innerHTML = '';
@@ -5445,14 +5367,12 @@
         throw new Error('Image decoded but has 0 naturalWidth');
       }
       drawClusterOverlay(face, token);
-      installClusterOverlayObserver();
     }).catch((err) => {
       if (state.clusters.heroToken !== token) return;
       console.warn('Image decode failed or naturalWidth 0, falling back to onload:', err);
       clusterHeroImg.onload = () => {
         if (state.clusters.heroToken !== token) return;
         requestAnimationFrame(() => drawClusterOverlay(face, token));
-        installClusterOverlayObserver();
       };
     });
 
@@ -5464,18 +5384,16 @@
   }
 
   function drawClusterOverlay(face, token) {
-    const renderFaces = (faces) => {
-      const filtered = filterClusterFaces(faces);
-      renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
-    };
     const bucket = face.bucket_prefix;
     if (!bucket) {
-      renderFaces([face]);
+      const filtered = [face].filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+      renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
       return;
     }
     const cache = state.clusters.bucketFaces[bucket];
     if (cache) {
-      renderFaces(cache);
+      const filtered = cache.filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+      renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
       return;
     }
     const params = new URLSearchParams({ variant: face.variant || '' });
@@ -5484,11 +5402,19 @@
       .then((payload) => {
         state.clusters.bucketFaces[bucket] = payload.faces || [];
         if (state.clusters.heroToken !== token) return;
-        renderFaces(state.clusters.bucketFaces[bucket]);
+        const filtered = state.clusters.bucketFaces[bucket].filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+        renderCandidateFacesOverlay(
+          clusterHeroOverlay,
+          clusterHeroWrapper,
+          clusterHeroImg,
+          filtered,
+          face.face_id
+        );
       })
       .catch(() => {
         if (state.clusters.heroToken !== token) return;
-        renderFaces([face]);
+        const filtered = [face].filter(f => state.clusters.showLowConf || ((f.confidence || 0) >= 0.75 && getFaceArea(f) >= 0.003));
+        renderCandidateFacesOverlay(clusterHeroOverlay, clusterHeroWrapper, clusterHeroImg, filtered, face.face_id);
       });
   }
 
