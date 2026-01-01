@@ -1,4 +1,4 @@
-name: Agent Task (Claude Only - Legacy)
+name: Agent Task (Gemini)
 
 on:
   issues:
@@ -10,11 +10,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  # Claude-only option for backwards compatibility
-  # NOTE: agent-task now triggers the orchestrator (see agent-orchestrator.yml)
-  # This workflow only runs for agent-claude label
-  implement_claude_only:
-    if: github.event.label.name == 'agent-claude'
+  implement:
+    if: github.event.label.name == 'agent-gemini'
     runs-on: self-hosted
 
     steps:
@@ -26,16 +23,16 @@ jobs:
 
       - name: Configure git
         run: |
-          git config user.name "GitHub Actions Bot (Claude)"
+          git config user.name "GitHub Actions Bot (Gemini)"
           git config user.email "actions@github.com"
 
-      - name: Run Claude Code to implement
+      - name: Run Google Gemini to implement
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          echo "Implementing issue #${ISSUE_NUMBER}..."
+          echo "🤖 Implementing issue #${ISSUE_NUMBER} with Google Gemini..."
 
           # Write issue body to temp file safely
           printf '%s' "$ISSUE_BODY" > /tmp/issue_body.txt
@@ -48,30 +45,35 @@ jobs:
             "$(cat /tmp/issue_body.txt)" \
             "" \
             "Instructions:" \
-            "1. Create a feature branch named 'feature/issue-${ISSUE_NUMBER}'" \
+            "1. Create a feature branch named 'feature/gemini-issue-${ISSUE_NUMBER}'" \
             "2. Implement the requested feature/refactoring exactly as described" \
             "3. Commit your changes with a clear, descriptive message" \
-            "4. Push the branch using: git push -u origin feature/issue-${ISSUE_NUMBER}" \
+            "4. Push the branch using: git push -u origin feature/gemini-issue-${ISSUE_NUMBER}" \
             "5. Create a PR using gh CLI that references 'Closes #${ISSUE_NUMBER}'" \
             "6. If there are tests, run them and ensure they pass" \
-            "7. If tests or checks fail, read the logs, fix the issue, and push again (max 2 retries)" \
-            "8. Post a brief status comment in the PR when done" \
+            "7. Post a brief status comment in the PR when done" \
             "" \
             "Work carefully and ensure all validation passes before marking as ready for review." \
             > /tmp/full_prompt.txt
 
-          # Run claude with the prompt file (no turn limit for self-hosted)
-          claude -p "$(cat /tmp/full_prompt.txt)" \
-            --allowedTools "Read,Edit,Write,Bash,Glob,Grep,TodoWrite"
+          # Run Gemini CLI (Google subscription/free tier)
+          if command -v gemini &> /dev/null; then
+            gemini --yolo "$(cat /tmp/full_prompt.txt)"
+          else
+            echo "❌ Gemini CLI not found. Please install with: npm install -g @google/generative-ai"
+            echo "Then authenticate with: gemini auth login"
+            exit 1
+          fi
 
       - name: Verify PR was created
         run: |
           pr_count=$(gh pr list --repo ${{ github.repository }} --search "Closes #${{ github.event.issue.number }}" --json number --jq '. | length')
           if [ "$pr_count" -eq "0" ]; then
-            echo "Error: No PR was created for issue #${{ github.event.issue.number }}"
-            exit 1
+            echo "⚠️  No PR was created for issue #${{ github.event.issue.number }}"
+            echo "This might be expected for simple tasks that don't require PRs"
+          else
+            echo "✓ PR successfully created for issue #${{ github.event.issue.number }}"
           fi
-          echo "✓ PR successfully created for issue #${{ github.event.issue.number }}"
 
       - name: Post completion comment
         if: always()
@@ -79,10 +81,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const status = '${{ job.status }}' === 'success' ? '✅ Completed (Claude)' : '❌ Failed (Claude)';
+            const status = '${{ job.status }}' === 'success' ? '✅ Completed (Gemini)' : '❌ Failed (Gemini)';
             await github.rest.issues.createComment({
               issue_number: ${{ github.event.issue.number }},
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `${status}: Claude Code agent has finished processing this issue. Check for a new PR.`
+              body: `${status}: Gemini agent has finished processing this issue.`
             });

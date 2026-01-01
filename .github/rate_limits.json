@@ -1,0 +1,21 @@
+{
+  "claude": {
+    "limited": true,
+    "reset_time": "unknown",
+    "last_error": "Rate limited",
+    "last_updated": "2026-01-01T18:00:00Z"
+  },
+  "codex": {
+    "limited": false,
+    "reset_time": null,
+    "last_error": null,
+    "last_updated": "2026-01-01T18:00:00Z"
+  },
+  "gemini": {
+    "limited": false,
+    "reset_time": null,
+    "last_error": null,
+    "last_updated": "2026-01-01T18:00:00Z",
+    "note": "Rate limit format not yet observed - will update on first occurrence"
+  }
+}

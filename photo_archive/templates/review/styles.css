@@ -168,6 +168,35 @@ button:focus-visible {
   color: #aaa;
 }
 
+.chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chip {
+  background: #181818;
+  color: #999;
+  border: 1px solid #333;
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chip:hover {
+  border-color: #555;
+  color: #ccc;
+}
+
+.chip.active {
+  background: #2a2a2a;
+  border-color: #4cafef;
+  color: #4cafef;
+  font-weight: 600;
+}
+
 .shortcut-panel {
   position: absolute;
   top: calc(100% + 0.35rem);
@@ -210,6 +239,7 @@ button:focus-visible {
   flex-direction: column;
   gap: 0.75rem;
   padding: 0 1rem 1rem;
+  padding-bottom: calc(72px + 1rem); /* Account for collapsed drawer height + margin */
   position: relative;
   overflow-y: auto; /* Make the stage (images) scrollable */
 }
@@ -225,11 +255,15 @@ button:focus-visible {
 }
 
 .note-drawer {
-  border-top: 1px solid #1f1f1f; /* Revert to top border for bottom position */
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  border-top: 1px solid #1f1f1f;
   background: rgba(5, 5, 5, 0.95);
+  backdrop-filter: blur(16px);
   transition: max-height 0.3s ease;
   overflow: hidden;
-  flex-shrink: 0; /* Prevent shrinking */
   z-index: 20;
 }
 
