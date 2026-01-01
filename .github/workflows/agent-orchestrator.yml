@@ -96,8 +96,10 @@ jobs:
           else
             echo "🔵 Attempting with Claude Code..."
             CLAUDE_LOG="/tmp/claude.log"
+            set +e
             claude -p "$(cat /tmp/full_prompt.txt)" --allowedTools "Read,Edit,Write,Bash,Glob,Grep,TodoWrite" 2>&1 | tee "$CLAUDE_LOG"
             CLAUDE_EXIT=${PIPESTATUS[0]}
+            set -e
             ERROR_LOG=$(cat "$CLAUDE_LOG")
 
             # Check for rate limit regardless of exit status
@@ -127,8 +129,10 @@ jobs:
             else
               echo "🔴 Attempting with OpenAI Codex..."
               CODEX_LOG="/tmp/codex.log"
+              set +e
               codex exec --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox "$(cat /tmp/full_prompt.txt)" 2>&1 | tee "$CODEX_LOG"
               CODEX_EXIT=${PIPESTATUS[0]}
+              set -e
               ERROR_LOG=$(cat "$CODEX_LOG")
 
               # Check for rate limit regardless of exit status
@@ -159,8 +163,10 @@ jobs:
             else
               echo "🟢 Attempting with Google Gemini..."
               GEMINI_LOG="/tmp/gemini.log"
+              set +e
               gemini --yolo "$(cat /tmp/full_prompt.txt)" 2>&1 | tee "$GEMINI_LOG"
               GEMINI_EXIT=${PIPESTATUS[0]}
+              set -e
               ERROR_LOG=$(cat "$GEMINI_LOG")
 
               # Generic error detection for Gemini (don't know exact format yet)
