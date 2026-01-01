@@ -57,9 +57,8 @@ jobs:
             > /tmp/full_prompt.txt
 
           # Run Codex CLI (ChatGPT subscription-based)
-          # Note: Codex CLI syntax may need adjustment based on actual installed version
           if command -v codex &> /dev/null; then
-            codex --prompt "$(cat /tmp/full_prompt.txt)" --auto-approve
+            codex "$(cat /tmp/full_prompt.txt)"
           else
             echo "❌ Codex CLI not found. Please install with: npm install -g @openai/codex-cli"
             echo "Then authenticate with: codex login"

@@ -57,9 +57,8 @@ jobs:
             > /tmp/full_prompt.txt
 
           # Run Gemini CLI (Google subscription/free tier)
-          # Note: Gemini CLI syntax may need adjustment based on actual installed version
           if command -v gemini &> /dev/null; then
-            gemini --prompt "$(cat /tmp/full_prompt.txt)" --execute
+            gemini --yolo "$(cat /tmp/full_prompt.txt)"
           else
             echo "❌ Gemini CLI not found. Please install with: npm install -g @google/generative-ai"
             echo "Then authenticate with: gemini auth login"
