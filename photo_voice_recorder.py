@@ -175,6 +175,7 @@ class AudioSession:
         self.audio_profile: Dict[str, object] = {"codec": "aac", "bitrate": 128000}
         self.current_clip_path: Optional[Path] = None
         self.device_index: Optional[int] = None
+        self.transcription_queue: Optional[queue.Queue] = None
 
     def start(
         self,
@@ -365,6 +366,13 @@ class AudioSession:
             return target
         except subprocess.CalledProcessError:
             return wav_path
+
+    def _queue_clip_for_transcription(self, clip_path: Path) -> None:
+        """Queue a single clip for real-time transcription."""
+        if not self.transcription_queue or not self.session_dir:
+            return
+        # Queue individual clip with its metadata
+        self.transcription_queue.put(("clip", clip_path, self.subject))
 
 
 class RecorderUI(QWidget):
@@ -582,6 +590,55 @@ class RecorderUI(QWidget):
         else:
             self.live_dictation_label.setText("Live dictation: listening...")
 
+    def _transcribe_single_clip(self, clip_path: Path, speaker: str) -> None:
+        """Transcribe a single clip and store the result."""
+        if whisper is None:
+            return
+
+        clip_path = Path(clip_path)
+
+        # Guard: Skip if already transcribed
+        txt_path = clip_path.with_suffix(".txt")
+        if txt_path.exists():
+            return
+
+        # Load metadata
+        meta_path = clip_path.with_suffix(".json")
+        if not meta_path.exists():
+            return
+
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        bucket_id = meta.get("bucketId")
+        if not bucket_id:
+            return
+
+        # Transcribe the clip
+        try:
+            model = whisper.load_model(DEFAULT_WHISPER_MODEL)
+            result = model.transcribe(str(clip_path), fp16=False)
+            text = (result.get("text") or "").strip()
+        except Exception:
+            return
+
+        if not text:
+            return
+
+        # Write transcript file alongside the clip
+        try:
+            txt_path.write_text(text + "\n", encoding="utf-8")
+        except OSError:
+            return
+
+        # Store in bucket transcript store
+        image_id = meta.get("imageId") or ""
+        session_id = meta.get("sessionId")
+        transcripts = {bucket_id: [(image_id, text)]}
+        apply_voice_transcripts(transcripts, speaker, session_id)
+
     def poll_state_file(self) -> None:
         try:
             stat = STATE_PATH.stat()
@@ -618,7 +675,7 @@ class RecorderUI(QWidget):
             f"State: {snapshot.bucketId} · {snapshot.imageId} ({snapshot.path or ''})"
         )
         self.last_snapshot = snapshot
-        speaker = self.subject.text().strip() or "me"
+        speaker = self.subject.text().strip() or "Ryan"
         for mode, session in self.sessions.items():
             finished_clip = session.on_state_change(snapshot)
             if (
@@ -647,6 +704,7 @@ class RecorderUI(QWidget):
         subject = self.subject.text().strip() or "Ryan"
         profile = self._current_audio_profile()
         device_index = self._selected_device_index()
+
         try:
             for mode in selected:
                 self.sessions[mode].start(
@@ -940,6 +998,13 @@ class SessionTranscriber:
 
     def _transcribe_file(self, wav_path: Path) -> str:
         assert self.model is not None
+        # Guard: Skip if already transcribed
+        txt_path = wav_path.with_suffix(".txt")
+        if txt_path.exists():
+            try:
+                return txt_path.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
         try:
             result = self.model.transcribe(str(wav_path), fp16=False)
         except Exception:  # pragma: no cover
