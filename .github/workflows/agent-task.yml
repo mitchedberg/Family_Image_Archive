@@ -57,10 +57,9 @@ jobs:
             "Work carefully and ensure all validation passes before marking as ready for review." \
             > /tmp/full_prompt.txt
 
-          # Run claude with the prompt file
+          # Run claude with the prompt file (no turn limit for self-hosted)
           claude -p "$(cat /tmp/full_prompt.txt)" \
-            --allowedTools "Read,Edit,Write,Bash,Glob,Grep,TodoWrite" \
-            --max-turns 100
+            --allowedTools "Read,Edit,Write,Bash,Glob,Grep,TodoWrite"
 
       - name: Verify PR was created
         run: |
