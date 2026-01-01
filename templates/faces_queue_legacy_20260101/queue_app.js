@@ -956,12 +956,8 @@
     const candidateImage = document.createElement('div');
     candidateImage.className = 'candidate-image';
     const img = document.createElement('img');
-    img.src = state.candidate.image || state.candidate.image_url || '';
+    img.src = state.candidate.image;
     img.alt = `Bucket ${state.candidate.bucket_prefix}`;
-    img.addEventListener('error', () => {
-      console.warn('Failed to load candidate image:', img.src);
-      img.alt = 'Image failed to load';
-    }, { once: true });
     candidateImage.appendChild(img);
     const overlayLayer = document.createElement('div');
     overlayLayer.className = 'candidate-image__overlay';
