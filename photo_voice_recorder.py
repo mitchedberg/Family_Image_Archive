@@ -314,8 +314,14 @@ class RecorderUI(QWidget):
         self.mic_info_label = QLabel("Mic: System default")
         self.mic_info_label.setMinimumWidth(220)
         self._mic_devices: Dict[int, dict] = {}
+        self._mic_signature: Optional[Tuple[Optional[int], Tuple[Tuple[int, str, int, int], ...]]] = None
+        self._mic_initialized = False
         self._populate_mic_choices()
         self.mic_box.currentIndexChanged.connect(self._refresh_mic_label)
+        self.mic_refresh_timer = QTimer()
+        self.mic_refresh_timer.setInterval(3000)
+        self.mic_refresh_timer.timeout.connect(self._refresh_mic_choices)
+        self.mic_refresh_timer.start()
         self.status_indicator = QLabel("IDLE")
         self.status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._update_indicator(False)
@@ -591,15 +597,40 @@ class RecorderUI(QWidget):
         return None
 
     def _populate_mic_choices(self) -> None:
-        self._mic_devices = {}
-        self.mic_box.clear()
-        self.mic_box.addItem("System default", None)
+        self._mic_initialized = False
+        self._refresh_mic_choices(force=True)
+
+    def _mic_device_signature(self, devices: List[dict]) -> Tuple[Optional[int], Tuple[Tuple[int, str, int, int], ...]]:
+        default_index = self._default_input_device()
+        inputs: List[Tuple[int, str, int, int]] = []
+        for idx, device in enumerate(devices):
+            if device.get("max_input_channels", 0) <= 0:
+                continue
+            name = device.get("name") or ""
+            channels = int(device.get("max_input_channels") or 0)
+            samplerate = int(device.get("default_samplerate") or 0)
+            inputs.append((idx, name, channels, samplerate))
+        return default_index, tuple(inputs)
+
+    def _refresh_mic_choices(self, force: bool = False) -> None:
         try:
             devices = sd.query_devices()
         except Exception:
-            self.mic_info_label.setText("Mic: system default (enumeration failed)")
+            if force:
+                self.mic_info_label.setText("Mic: system default (enumeration failed)")
             return
-        default_index = self._default_input_device()
+        signature = self._mic_device_signature(devices)
+        if not force and signature == self._mic_signature:
+            return
+        self._mic_signature = signature
+        previous_selection = self._selected_device_index()
+        preferred_index = previous_selection
+        if previous_selection is None and not self._mic_initialized:
+            preferred_index = signature[0]
+        self._mic_devices = {}
+        self.mic_box.blockSignals(True)
+        self.mic_box.clear()
+        self.mic_box.addItem("System default", None)
         selected_combo_index = 0
         for idx, device in enumerate(devices):
             if device.get("max_input_channels", 0) <= 0:
@@ -608,9 +639,13 @@ class RecorderUI(QWidget):
             display = f"{label} (#{idx})"
             self.mic_box.addItem(display, idx)
             self._mic_devices[idx] = device
-            if default_index is not None and idx == default_index:
+            if preferred_index is not None and idx == preferred_index:
                 selected_combo_index = self.mic_box.count() - 1
+        if preferred_index is not None and preferred_index not in self._mic_devices:
+            selected_combo_index = 0
         self.mic_box.setCurrentIndex(selected_combo_index)
+        self.mic_box.blockSignals(False)
+        self._mic_initialized = True
         self._refresh_mic_label()
 
     def _refresh_mic_label(self) -> None:
