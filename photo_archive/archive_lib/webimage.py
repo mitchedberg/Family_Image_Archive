@@ -11,6 +11,7 @@ from PIL import Image
 from .ingest.assigner import BUCKET_PREFIX_LENGTH
 from .orientation import OrientationInfo, ensure_display_orientation, extract_orientation_info
 from .sidecar import BucketSidecar, write_sidecar
+from .variant_selector import build_variant_index
 
 DEFAULT_WIDTH = 1600
 DEFAULT_QUALITY = 85
@@ -43,7 +44,7 @@ def ensure_web_images(
 
         variants = info["variants"] if isinstance(info, dict) else info.variants
         data = (info.get("data") if isinstance(info, dict) else getattr(info, "data", None)) or {}
-        variant_map = _variant_index(variants)
+        variant_map = build_variant_index(variants)
         orientation_info = extract_orientation_info(info)
         state = dict(data.get("derived_state") or {})
         dirty_flag = bool(state.get("dirty"))
@@ -108,15 +109,6 @@ def ensure_web_images(
                 sidecar_path = bucket_dir / "sidecar.json"
                 write_sidecar(sidecar_path, payload)
     return counts
-
-
-def _variant_index(variants: Iterable[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
-    index: Dict[str, Dict[str, object]] = {}
-    for variant in variants:
-        role = variant.get("role")
-        if role and role not in index:
-            index[role] = variant
-    return index
 
 
 def _write_resized(

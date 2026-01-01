@@ -6,14 +6,11 @@ import logging
 import mimetypes
 import os
 import shutil
-import signal
 import subprocess
 import sys
-import threading
 import time
 import webbrowser
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -28,6 +25,8 @@ from archive_lib.reporting import BucketInfo, load_bucket_infos
 from archive_lib.photo_transforms import PhotoTransformStore
 from archive_lib.webimage import ensure_web_images
 from archive_lib.ocr import perform_ocr, vision_available, timestamp
+from archive_lib.variant_selector import build_variant_index
+from archive_lib.web_server import BaseRequestHandler, BaseWebServer
 
 VOICE_STATE_DIR = Path.home() / "PhotoVoiceNotes"
 VOICE_STATE_FILE = VOICE_STATE_DIR / "current_state.json"
@@ -101,11 +100,11 @@ def main(
 
     review_dir = _write_review_assets(cfg, dataset)
     server = _start_server(cfg, decision_store, photo_transform_store)
-    url = f"http://127.0.0.1:{server.server_address[1]}/views/review/index.html"
+    url = f"{server.url}/views/review/index.html"
     typer.echo(f"Review server running at {url}")
     webbrowser.open(url)
     typer.echo("Press Ctrl+C to stop…")
-    _wait_forever(server)
+    server.wait_forever()
 
 
 def _build_dataset(
@@ -134,7 +133,7 @@ def _build_dataset(
         has_ai = web_ai.exists()
         if not include_all and not has_ai:
             continue
-        variant_map = _variant_index(info.variants)
+        variant_map = build_variant_index(info.variants)
         finder_front_variant = variant_map.get("raw_front") or variant_map.get("proxy_front")
         display_back_variant = variant_map.get("proxy_back") or variant_map.get("raw_back")
         finder_back_variant = variant_map.get("raw_back") or variant_map.get("proxy_back")
@@ -309,13 +308,6 @@ def _merge_voice_transcripts(
     return merged
 
 
-def _variant_index(variants) -> Dict[str, object]:
-    index: Dict[str, object] = {}
-    for variant in variants or []:
-        role = getattr(variant, "role", None) or (variant.get("role") if isinstance(variant, dict) else None)
-        if role and role not in index:
-            index[role] = variant
-    return index
 
 
 def _build_orientation_meta(info, raw_variant) -> Dict[str, Optional[int]]:
@@ -528,7 +520,7 @@ def _linked_back_assets(cfg: config_mod.AppConfig, back_info: BucketInfo) -> Dic
     bucket_dir = cfg.buckets_dir / f"bkt_{back_info.bucket_prefix}"
     web_front = bucket_dir / "derived" / "web_front.jpg"
     thumb_front = bucket_dir / "derived" / "thumb_front.jpg"
-    variant_map = _variant_index(back_info.variants)
+    variant_map = build_variant_index(back_info.variants)
     finder_variant = variant_map.get("raw_front") or variant_map.get("proxy_front")
     review_root = cfg.staging_root / "02_WORKING_BUCKETS"
     return {
@@ -565,7 +557,7 @@ def _start_server(
     cfg: config_mod.AppConfig,
     decision_store: DecisionStore,
     photo_transform_store: PhotoTransformStore,
-) -> ThreadingHTTPServer:
+) -> BaseWebServer:
     base_dir = cfg.staging_root / "02_WORKING_BUCKETS"
     handler_cls = partial(
         ReviewRequestHandler,
@@ -573,29 +565,12 @@ def _start_server(
         decision_store=decision_store,
         photo_transform_store=photo_transform_store,
     )
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)  # ephemeral port
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    server = BaseWebServer(handler_cls)
+    server.start()
     return server
 
 
-def _wait_forever(server: ThreadingHTTPServer) -> None:
-    try:
-        signal.pause()
-    except AttributeError:
-        # Windows does not have pause(); fall back to sleep loop
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.shutdown()
-
-
-class ReviewRequestHandler(SimpleHTTPRequestHandler):
+class ReviewRequestHandler(BaseRequestHandler):
     def __init__(
         self,
         *args,
@@ -678,29 +653,22 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
             "voice_transcripts": normalized_voice
         })
 
-    def do_POST(self) -> None:  # pragma: no cover - exercised manually
-        endpoint = self.path.rstrip("/")
+    def _handle_api(self, endpoint: str, data: dict) -> None:  # pragma: no cover - exercised manually
+        """Route API requests to specific handlers."""
         if endpoint == "/api/decision":
-            self._handle_decision()
+            self._handle_decision(data)
         elif endpoint == "/api/reveal":
-            self._handle_reveal()
+            self._handle_reveal(data)
         elif endpoint == "/api/ocr":
-            self._handle_ocr()
+            self._handle_ocr(data)
         elif endpoint == "/api/state_update":
-            self._handle_state_update()
+            self._handle_state_update(data)
         elif endpoint == "/api/photo/transform":
-            self._handle_photo_transform()
+            self._handle_photo_transform_post(data)
         else:
-            self.send_error(404, "Unknown endpoint")
+            raise NotImplementedError(f"Unknown endpoint: {endpoint}")
 
-    def _handle_decision(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8") if length else "{}"
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            self.send_error(400, "Invalid JSON")
-            return
+    def _handle_decision(self, data: dict) -> None:
         bucket_prefix = data.get("bucket_prefix")
         note = data.get("note") or ""
         ocr_status = (data.get("ocr_status") or "").strip()
@@ -720,14 +688,7 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
         except ValueError as exc:  # invalid choice
             self.send_error(400, str(exc))
 
-    def _handle_reveal(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8") if length else "{}"
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            self.send_error(400, "Invalid JSON")
-            return
+    def _handle_reveal(self, data: dict) -> None:
         path_value = (data.get("path") or "").strip()
         if not path_value:
             self.send_error(400, "Missing path")
@@ -757,14 +718,7 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
         except OSError as exc:  # pragma: no cover
             raise RuntimeError(f"Failed to reveal file: {exc}") from exc
 
-    def _handle_ocr(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8") if length else "{}"
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            self.send_error(400, "Invalid JSON")
-            return
+    def _handle_ocr(self, data: dict) -> None:
         bucket_prefix = (data.get("bucket_prefix") or "").strip()
         variant = (data.get("variant") or "raw_back").strip() or "raw_back"
         if not bucket_prefix:
@@ -791,14 +745,7 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
             return
         self._write_json({"status": "ok", "text": text})
 
-    def _handle_state_update(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8") if length else "{}"
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            self.send_error(400, "Invalid JSON")
-            return
+    def _handle_state_update(self, data: dict) -> None:
         bucket_id = (data.get("bucketId") or "").strip()
         if not bucket_id:
             self._write_json({"status": "ignored"})
@@ -856,14 +803,7 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
         payload.update(transform)
         self._write_json(payload)
 
-    def _handle_photo_transform(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = self.rfile.read(length).decode("utf-8") if length else "{}"
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            self.send_error(400, "Invalid JSON")
-            return
+    def _handle_photo_transform_post(self, data: dict) -> None:
         bucket_prefix = (data.get("bucket_prefix") or "").strip()
         side = (data.get("side") or "").strip().lower()
         if not bucket_prefix:
@@ -879,17 +819,6 @@ class ReviewRequestHandler(SimpleHTTPRequestHandler):
             self.send_error(400, str(exc))
             return
         self._write_json({"status": "ok", "bucket_prefix": bucket_prefix, "side": side, "rotate": value})
-
-    def log_message(self, format: str, *args) -> None:  # pragma: no cover
-        return  # Silence default logging
-
-    def _write_json(self, data: Dict[str, object]) -> None:
-        encoded = json.dumps(data).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
 
     def _serve_fullres(self, parsed):
         params = parse_qs(parsed.query)

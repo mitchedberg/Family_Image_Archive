@@ -12,11 +12,15 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .config import AppConfig
+from .filename_parser import (
+    extract_fastfoto_token,
+    extract_hex_tokens,
+    extract_img_token,
+    extract_pro4k_token,
+)
 from .imaging import dhash
-from .ingest.assigner import BUCKET_PREFIX_LENGTH, extract_fastfoto_token, extract_img_token
+from .ingest.assigner import BUCKET_PREFIX_LENGTH
 
-PRO4K_RE = re.compile(r"pro[_-]?4k[_-]?(\d+)", re.IGNORECASE)
-HEX_RE = re.compile(r"\b[0-9a-f]{8,16}\b", re.IGNORECASE)
 PHASH_THRESHOLD = 10
 
 
@@ -552,11 +556,9 @@ def _write_phash_candidates(
 
 
 def parse_tokens(basename: str) -> PendingTokens:
-    lower = basename.lower()
-    pro_match = PRO4K_RE.search(lower)
-    pro_token = pro_match.group(1) if pro_match else None
+    pro_token = extract_pro4k_token(basename)
     img_token = extract_img_token(basename)
-    hex_tokens = [token.lower() for token in HEX_RE.findall(lower)]
+    hex_tokens = extract_hex_tokens(basename)
     filename_fastfoto = extract_fastfoto_token(basename)
     return PendingTokens(
         pro4k_token=pro_token,
