@@ -56,9 +56,10 @@ jobs:
             "Work carefully and ensure all validation passes before marking as ready for review." \
             > /tmp/full_prompt.txt
 
-          # Run Codex CLI (ChatGPT subscription-based)
+          # Run Codex CLI in non-interactive mode (ChatGPT subscription-based)
           if command -v codex &> /dev/null; then
-            codex "$(cat /tmp/full_prompt.txt)"
+            # Use exec --full-auto for non-interactive automation with file editing
+            codex exec --full-auto "$(cat /tmp/full_prompt.txt)"
           else
             echo "❌ Codex CLI not found. Please install with: npm install -g @openai/codex-cli"
             echo "Then authenticate with: codex login"
