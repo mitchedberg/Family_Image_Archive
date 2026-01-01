@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 from .. import imaging
 from ..config import AppConfig
+from ..filename_parser import extract_fastfoto_token, extract_img_token
 from ..sidecar import BucketSidecar, write_sidecar
 
 RAW_FRONT = "raw_front"
@@ -32,12 +33,8 @@ SCAN_TOKENS = {"scan", "scanned", "copy", "edit", "edited", "export", "original"
 QUALITY_TOKENS = {"hires", "highres", "lowres", "web", "print"}
 ORDER_TOKENS = {"first", "second", "1", "2", "001", "002"}
 TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
-FASTFOTO_ID_RE = re.compile(r"(?i)fastfoto[_-]?(\d{3,6})")
-IMG_ID_RE = re.compile(r"(?i)(img\d{8}[_-]?\d{4,})")
-IMG_SUFFIX_DBLUND_RE = re.compile(r"__([0-9]+)")
-IMG_SUFFIX_PAREN_RE = re.compile(r"\(([0-9]+)\)")
-HEX_PREFIX_RE = re.compile(r"(?i)\b[a-f0-9]{8,64}\b")
-UUID_RE = re.compile(r"(?i)([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})")
+# Import regex patterns from centralized parser module
+from ..filename_parser import FASTFOTO_ID_RE, UUID_RE
 LUMINANCE_FLIP_THRESHOLD = 0.15
 BUCKET_PREFIX_LENGTH = 12
 
@@ -726,39 +723,6 @@ def load_overrides(config_dir: Path) -> List[OverrideRule]:
                 )
             )
     return rules
-
-
-def extract_fastfoto_token(filename: Optional[str]) -> Optional[str]:
-    if not filename:
-        return None
-    match = FASTFOTO_ID_RE.search(filename)
-    if match:
-        return match.group(1)
-    return None
-
-
-def extract_img_token(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return None
-    value_lower = value.lower()
-    match = IMG_ID_RE.search(value_lower)
-    if not match:
-        return None
-    token = match.group(1).lower().replace("-", "_")
-    suffix = None
-    start = match.end()
-    tail = value_lower[start:]
-    if tail:
-        dbl = IMG_SUFFIX_DBLUND_RE.search(tail)
-        if dbl:
-            suffix = dbl.group(1)
-        else:
-            paren = IMG_SUFFIX_PAREN_RE.search(tail)
-            if paren:
-                suffix = paren.group(1)
-    if suffix:
-        token = f"{token}__{suffix}"
-    return token
 
 
 def compute_group_key(filename: Optional[str]) -> str:
