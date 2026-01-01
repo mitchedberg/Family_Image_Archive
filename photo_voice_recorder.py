@@ -165,7 +165,7 @@ class AudioSession:
         self.stream: Optional[sd.InputStream] = None
         self.sndfile: Optional[sf.SoundFile] = None
         self.mode = "segmented"
-        self.subject = "me"
+        self.subject = "Ryan"
         self.session_dir: Optional[Path] = None
         self.last_session_dir: Optional[Path] = None
         self.session_start_monotonic: Optional[float] = None
@@ -187,7 +187,7 @@ class AudioSession:
         if self.recording:
             return
         self.mode = mode
-        self.subject = subject or "me"
+        self.subject = subject or "Ryan"
         self.audio_profile = audio_profile or {"codec": "aac", "bitrate": 128000}
         self.device_index = device_index
         session_ts = time.strftime("%Y%m%d_%H%M%S")
@@ -376,8 +376,8 @@ class RecorderUI(QWidget):
         self.bucket_label.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px; color: #555;")
         self.state_label = QLabel("State: (waiting)")
         self.state_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.subject = QLineEdit("me")
-        self.subject.setPlaceholderText("speaker tag (e.g., mom/dad/me)")
+        self.subject = QLineEdit("Ryan")
+        self.subject.setPlaceholderText("speaker tag (e.g., Ryan/mom/dad)")
         self.btn_start = QPushButton("Record")
         self.btn_stop = QPushButton("Stop")
         self.btn_stop.setEnabled(False)
@@ -644,7 +644,7 @@ class RecorderUI(QWidget):
         if not selected:
             QMessageBox.warning(self, "Select a mode", "Enable at least one mode (segmented or continuous).")
             return
-        subject = self.subject.text().strip() or "me"
+        subject = self.subject.text().strip() or "Ryan"
         profile = self._current_audio_profile()
         device_index = self._selected_device_index()
         try:
@@ -683,7 +683,7 @@ class RecorderUI(QWidget):
         self.btn_stop.setEnabled(False)
         self._emit_recorder_state()
         self._stop_live_dictation()
-        speaker = self.subject.text().strip() or "me"
+        speaker = self.subject.text().strip() or "Ryan"
         for mode, session_dir, last_clip in completed:
             if mode != "segmented":
                 continue
@@ -734,7 +734,7 @@ class RecorderUI(QWidget):
         if not session_path.exists():
             QMessageBox.warning(self, "Not found", f"{session_path} does not exist.")
             return
-        speaker = self.subject.text().strip() or "me"
+        speaker = self.subject.text().strip() or "Ryan"
         self._transcribe_session(session_path, speaker, confirm=False)
 
     def _maybe_transcribe_session(self, session_dir: Path, speaker: str) -> None:
@@ -893,7 +893,7 @@ class RecorderUI(QWidget):
             "bucketId": snapshot.bucketId if snapshot else None,
             "imageId": snapshot.imageId if snapshot else None,
             "modes": sorted(self.recording_modes),
-            "subject": self.subject.text().strip() or "me",
+            "subject": self.subject.text().strip() or "Ryan",
             "updated_at": datetime.utcnow().isoformat() + "Z",
         }
         try:
