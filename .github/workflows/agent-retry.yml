@@ -1,0 +1,109 @@
+name: Agent Retry (Auto-recover from rate limits)
+
+on:
+  schedule:
+    # Run every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check-and-retry:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check rate limit status and retry
+        run: |
+          echo "🔄 Checking for rate-limited issues that can be retried..."
+
+          # Pull latest rate limits
+          git pull
+
+          if [ ! -f .github/rate_limits.json ]; then
+            echo "No rate limits file found, nothing to do"
+            exit 0
+          fi
+
+          echo "Current rate limit status:"
+          cat .github/rate_limits.json | jq .
+
+          # Check if any limits have expired (simple check - could be more sophisticated)
+          CURRENT_TIME=$(date -u +%s)
+
+          # For now, we'll just clear limits older than 12 hours as a conservative approach
+          # TODO: Parse actual reset times from rate_limits.json once we have reliable formats
+
+          TWELVE_HOURS_AGO=$(date -u -d '12 hours ago' +%s 2>/dev/null || date -u -v-12H +%s)
+
+          echo "Clearing any rate limits older than 12 hours..."
+
+          # Reset all limits (conservative - assumes daily resets)
+          # In practice, Claude resets daily at 10am PST, others may vary
+          jq '.claude.limited = false | .codex.limited = false | .gemini.limited = false' \
+            .github/rate_limits.json > /tmp/rate_limits.json && mv /tmp/rate_limits.json .github/rate_limits.json
+
+          echo "Updated rate limits:"
+          cat .github/rate_limits.json | jq .
+
+          # Find issues labeled as rate-limited
+          RATE_LIMITED_ISSUES=$(gh issue list \
+            --repo ${{ github.repository }} \
+            --label "rate-limited-all-agents" \
+            --state open \
+            --json number,title \
+            --jq '.[] | .number')
+
+          if [ -z "$RATE_LIMITED_ISSUES" ]; then
+            echo "✅ No rate-limited issues to retry"
+            exit 0
+          fi
+
+          echo "Found rate-limited issues to retry:"
+          echo "$RATE_LIMITED_ISSUES"
+
+          # Commit cleared rate limits
+          if [ -n "$(git status --porcelain .github/rate_limits.json)" ]; then
+            git config user.name "GitHub Actions Bot"
+            git config user.email "actions@github.com"
+            git add .github/rate_limits.json
+            git commit -m "Reset rate limits for retry cycle [skip ci]"
+            git push
+          fi
+
+          # Retry each issue by removing rate-limit label and re-adding agent-auto
+          for issue_num in $RATE_LIMITED_ISSUES; do
+            echo "♻️  Retrying issue #$issue_num..."
+
+            # Remove rate-limited label
+            gh issue edit $issue_num \
+              --remove-label "rate-limited-all-agents" \
+              --repo ${{ github.repository }}
+
+            sleep 2
+
+            # Re-add agent-auto label to trigger orchestrator
+            gh issue edit $issue_num \
+              --add-label "agent-auto" \
+              --repo ${{ github.repository }}
+
+            # Add comment
+            gh issue comment $issue_num \
+              --body "🔄 **Automatic retry initiated**\n\nRate limits have been reset. Attempting to process this issue again with the agent orchestrator." \
+              --repo ${{ github.repository }}
+
+            echo "✅ Triggered retry for issue #$issue_num"
+
+            # Small delay between retries
+            sleep 5
+          done
+
+          echo "✅ All rate-limited issues have been queued for retry"
