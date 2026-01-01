@@ -1,4 +1,4 @@
-name: Agent Task (Claude Code)
+name: Agent Task (Claude Only - Legacy)
 
 on:
   issues:
@@ -10,8 +10,11 @@ permissions:
   pull-requests: write
 
 jobs:
-  implement:
-    if: github.event.label.name == 'agent-task' || github.event.label.name == 'agent-claude'
+  # Claude-only option for backwards compatibility
+  # NOTE: agent-task now triggers the orchestrator (see agent-orchestrator.yml)
+  # This workflow only runs for agent-claude label
+  implement_claude_only:
+    if: github.event.label.name == 'agent-claude'
     runs-on: self-hosted
 
     steps:

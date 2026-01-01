@@ -14,14 +14,17 @@ Add **one** of these labels:
 
 | Label | Behavior |
 |-------|----------|
-| `agent-auto` | 🎯 **RECOMMENDED** - Intelligent orchestrator tries all 3 agents with automatic fallback |
-| `agent-claude` | Forces use of Claude Code only |
+| `agent-task` | 🎯 **DEFAULT** - Smart orchestrator (tries all 3 agents with automatic fallback) |
+| `agent-auto` | Same as `agent-task` - smart orchestrator |
+| `agent-claude` | Forces use of Claude Code only (legacy) |
 | `agent-codex` | Forces use of OpenAI Codex only |
 | `agent-gemini` | Forces use of Google Gemini only |
 
+**Note:** `agent-task` is the standard label - it now uses intelligent multi-agent orchestration by default.
+
 ### 3. Automatic Execution
 
-**With `agent-auto` (Smart Mode):**
+**With `agent-task` or `agent-auto` (Smart Mode - DEFAULT):**
 1. System checks `.github/rate_limits.json` to see which agents are available
 2. Tries agents in order: Claude → Codex → Gemini
 3. Detects rate limit errors and parses reset times
@@ -29,8 +32,8 @@ Add **one** of these labels:
 5. Updates rate limit tracking file
 6. If all agents are rate-limited, adds `rate-limited-all-agents` label
 
-**With specific agent labels:**
-- Runs that agent only
+**With specific agent labels (`agent-claude`, `agent-codex`, `agent-gemini`):**
+- Runs that specific agent only
 - No fallback
 - Useful for testing or forcing a specific model
 
@@ -173,18 +176,43 @@ gh workflow run agent-retry.yml
 Issue labeled 'rate-limited-all-agents' - will retry automatically
 ```
 
+## Usage Tracking Limitations
+
+**Important:** The CLIs use subscription authentication (not API keys), which means:
+
+- ❌ **Claude Code**: No API to check subscription usage (only works for API key billing)
+- ❌ **OpenAI Codex**: No "remaining credits" endpoint for ChatGPT subscriptions
+- ❌ **Google Gemini**: No programmatic quota check for CLI users (must view in console)
+
+**What we CAN track:**
+- ✅ When rate limits occur (from error messages)
+- ✅ Reset times (parsed from error messages)
+- ✅ Which agent succeeded for each task
+- ✅ Historical run counts in workflow logs
+
+**What we CANNOT track:**
+- ❌ Real-time usage/quota remaining
+- ❌ Proactive warnings before hitting limits
+- ❌ Precise cost per run
+
+This is a limitation of using subscription-based CLIs instead of API keys. The system works reactively (detects limits when hit) rather than proactively (warns before hitting limits).
+
 ## Future Enhancements
 
 ### Planned (Need Verification)
 - [ ] Parse Gemini rate limit error format (once observed)
 - [ ] Precise reset time parsing for all agents
-- [ ] Usage API integration for real-time metrics
-- [ ] Dashboard with visual meters
+- [ ] Track successful runs per agent in rate_limits.json
+
+### Requires API Keys (Not Subscriptions)
+- [ ] Real-time usage metrics
+- [ ] Proactive quota warnings
+- [ ] Cost tracking per run
 
 ### Possible (External Tools Needed)
-- [ ] Menu bar app showing agent capacity
+- [ ] Menu bar app showing agent status (would show last known state)
 - [ ] Desktop notifications when limits reset
-- [ ] Web dashboard with usage graphs
+- [ ] Web dashboard with workflow history
 
 ## Troubleshooting
 

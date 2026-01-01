@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   orchestrate:
-    if: github.event.label.name == 'agent-auto'
+    if: github.event.label.name == 'agent-auto' || github.event.label.name == 'agent-task'
     runs-on: self-hosted
 
     steps:
