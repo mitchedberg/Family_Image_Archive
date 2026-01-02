@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QCheckBox,
     QComboBox,
+    QGroupBox,
     QFileDialog,
 )
 
@@ -417,7 +418,7 @@ class RecorderUI(QWidget):
         self.btn_transcribe_old = QPushButton("Transcribe Older Session…")
 
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("Modes:"))
+        mode_row.addWidget(QLabel("Recording modes:"))
         mode_row.addWidget(self.chk_segmented)
         mode_row.addWidget(self.chk_continuous)
         mode_row.addStretch()
@@ -440,17 +441,22 @@ class RecorderUI(QWidget):
         manage_row.addWidget(self.btn_transcribe_old)
 
         transcribe_row = QHBoxLayout()
-        transcribe_row.addWidget(QLabel("Transcription:"))
+        transcribe_row.addWidget(QLabel("Transcription options:"))
         transcribe_row.addWidget(self.chk_live_dictation)
         transcribe_row.addWidget(self.chk_whisper_photo)
         transcribe_row.addWidget(self.chk_whisper_session)
         transcribe_row.addStretch()
 
+        options_group = QGroupBox("Recording + Transcription")
+        options_layout = QVBoxLayout()
+        options_layout.addLayout(mode_row)
+        options_layout.addLayout(transcribe_row)
+        options_group.setLayout(options_layout)
+
         layout = QVBoxLayout()
-        layout.addLayout(mode_row)
+        layout.addWidget(options_group)
         layout.addLayout(controls_row)
         layout.addLayout(manage_row)
-        layout.addLayout(transcribe_row)
         layout.addWidget(self.bucket_label)
         layout.addWidget(self.state_label)
         self.live_dictation_label = QLabel("Live dictation: (disabled)")
