@@ -944,6 +944,44 @@
       });
   }
 
+  function normalizeCandidateImageUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('/') || /^https?:\/\//.test(trimmed)) {
+      return trimmed;
+    }
+    if (trimmed.startsWith('buckets/')) {
+      return `/${trimmed}`;
+    }
+    return trimmed;
+  }
+
+  function getCandidateImageSources(candidate) {
+    if (!candidate) return [];
+    const bucketPrefix = candidate.bucket_prefix || candidate.bucketPrefix || '';
+    const sources = [
+      candidate.image,
+      candidate.image_url,
+      candidate.imageUrl,
+      candidate.front_url,
+      candidate.back_url,
+    ];
+    if (bucketPrefix) {
+      sources.push(`/buckets/bkt_${bucketPrefix}/derived/web_front.jpg`);
+      sources.push(`/buckets/bkt_${bucketPrefix}/derived/web_back.jpg`);
+    }
+    const unique = [];
+    const seen = new Set();
+    sources.forEach((source) => {
+      const normalized = normalizeCandidateImageUrl(source);
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      unique.push(normalized);
+    });
+    return unique;
+  }
+
   function renderCandidate() {
     if (!singleView || !state.candidate) return;
     if (cleanupCandidateOverlay) {
@@ -961,12 +999,38 @@
     const candidateImage = document.createElement('div');
     candidateImage.className = 'candidate-image';
     const img = document.createElement('img');
-    img.src = state.candidate.image || state.candidate.image_url || '';
     img.alt = `Bucket ${state.candidate.bucket_prefix}`;
-    img.addEventListener('error', () => {
-      console.warn('Failed to load candidate image:', img.src);
-      img.alt = 'Image failed to load';
-    }, { once: true });
+    const candidateSources = getCandidateImageSources(state.candidate);
+    let candidateSourceIndex = 0;
+    const clearCandidateListeners = () => {
+      img.removeEventListener('load', handleCandidateLoad);
+      img.removeEventListener('error', handleCandidateError);
+    };
+    const loadNextCandidateSource = () => {
+      if (candidateSourceIndex >= candidateSources.length) {
+        clearCandidateListeners();
+        console.warn('Failed to load candidate image:', img.src);
+        img.removeAttribute('src');
+        img.alt = 'Image failed to load';
+        return;
+      }
+      const nextSource = candidateSources[candidateSourceIndex];
+      candidateSourceIndex += 1;
+      img.src = nextSource;
+    };
+    const handleCandidateLoad = () => {
+      clearCandidateListeners();
+    };
+    const handleCandidateError = () => {
+      loadNextCandidateSource();
+    };
+    if (candidateSources.length) {
+      img.addEventListener('load', handleCandidateLoad);
+      img.addEventListener('error', handleCandidateError);
+      loadNextCandidateSource();
+    } else {
+      img.alt = 'Image unavailable';
+    }
     candidateImage.appendChild(img);
     const overlayLayer = document.createElement('div');
     overlayLayer.className = 'candidate-image__overlay';
